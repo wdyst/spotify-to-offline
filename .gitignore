@@ -19,6 +19,7 @@ __pycache__/
 # Credentials / env files (never commit these)
 .env
 secrets.ps1
+config.ini
 
 # OS junk
 .DS_Store
