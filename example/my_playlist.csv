@@ -1,0 +1,4 @@
+Track URI,Track Name,Album Name,Artist Name(s),Release Date,Duration (ms),Popularity,Explicit,Added By,Added At,Genres,Record Label,Danceability,Energy,Key,Loudness,Mode,Speechiness,Acousticness,Instrumentalness,Liveness,Valence,Tempo,Time Signature
+spotify:track:0eGsygTp906u18L0Oimnem,Highway to Hell,Highway to Hell,AC/DC,1979-07-27,208000,83,false,,2023-08-14T02:11:00Z,"hard rock,rock","Atlantic",0.563,0.952,1,-5.499,1,0.0598,0.000101,0.00198,0.254,0.682,116.054,4
+spotify:track:7snQQk1zcKl8gZ92AnueZW,Bohemian Rhapsody,A Night at the Opera,Queen,1975-11-21,354000,85,false,,2023-08-14T02:11:05Z,"glam rock,rock","EMI",0.399,0.398,7,-11.732,0,0.0444,0.279,0.000119,0.302,0.228,71.148,4
+spotify:track:4cOdK2wGLETKBW3PvgPWqT,Smells Like Teen Spirit,Nevermind,Nirvana,1991-09-24,301000,84,false,,2023-08-14T02:11:10Z,"grunge,alternative rock","DGC",0.506,0.923,10,-5.965,1,0.0763,0.000148,0.0000961,0.814,0.635,116.761,4

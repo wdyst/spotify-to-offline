@@ -1,0 +1,26 @@
+# Personal playlist data — don't commit your listening history
+playlists_raw/
+playlists_sldl/
+
+# Binary — download via 1_setup_sldl.ps1
+sockseek.exe
+sldl.exe
+
+# Runtime output
+download_log.txt
+m3u_unmatched.txt
+*.log
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Credentials / env files (never commit these)
+.env
+secrets.ps1
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
