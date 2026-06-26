@@ -29,6 +29,10 @@ pub enum Event {
     TrackDone     { artist: String, title: String, status: String },
     PlaylistDone  { name: String },
     AllDone       { stats: Stats },
+    /// Emitted by an import task when it completes
+    ImportDone    { count: usize },
+    /// Emitted by an M3U generation task when it completes
+    M3uDone,
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

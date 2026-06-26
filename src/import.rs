@@ -146,6 +146,109 @@ fn convert_csv(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+// ── TUI-friendly import helpers ───────────────────────────────────────────────
+
+/// Import from a path the user typed.
+/// Accepts: a .zip file (extracts then converts) or a directory of CSVs (copies then converts).
+pub fn import_path(path: &Path, log: impl Fn(String)) -> Result<usize> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+
+    if path.is_file() && ext == "zip" {
+        log(format!("Extracting {}…", path.display()));
+        extract_zip(path)?;
+        convert_all_with_log(log)
+    } else if path.is_dir() {
+        log(format!("Reading CSVs from {}…", path.display()));
+        let raw = raw_dir();
+        std::fs::create_dir_all(&raw)?;
+        let mut copied = 0usize;
+        for entry in std::fs::read_dir(path)?.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("csv") {
+                let dest = raw.join(p.file_name().unwrap());
+                std::fs::copy(&p, &dest)?;
+                log(format!("  ← {}", p.file_name().unwrap_or_default().to_string_lossy()));
+                copied += 1;
+            }
+        }
+        if copied == 0 {
+            anyhow::bail!("No CSV files found in {}", path.display());
+        }
+        convert_all_with_log(log)
+    } else {
+        anyhow::bail!("'{}' is not a ZIP file or directory", path.display());
+    }
+}
+
+/// Try to find and import Exportify CSVs without the user specifying a path.
+/// Search order:
+///   1. work_dir() already has converted CSVs → nothing to do, return count
+///   2. raw_dir()  has raw CSVs  → convert them
+///   3. playlists_raw/ next to the s2o binary
+///   4. playlists_raw/ in the current working directory
+pub fn auto_detect(log: impl Fn(String)) -> Result<usize> {
+    // If work dir already has content, just report it
+    let work = work_dir();
+    if work.exists() {
+        let existing = csv_count(&work);
+        if existing > 0 {
+            log(format!("· {} playlist(s) already imported", existing));
+            return Ok(existing);
+        }
+    }
+
+    // Candidate raw folders, in preference order
+    let exe_raw = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("playlists_raw")));
+    let cwd_raw = std::env::current_dir()
+        .ok()
+        .map(|d| d.join("playlists_raw"));
+
+    let candidates: Vec<PathBuf> = [
+        Some(raw_dir()),
+        exe_raw,
+        cwd_raw,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for dir in candidates {
+        if dir.exists() && csv_count(&dir) > 0 {
+            log(format!("· Found CSVs in {}", dir.display()));
+            // If this isn't raw_dir already, copy into raw_dir first
+            let raw = raw_dir();
+            if dir != raw {
+                std::fs::create_dir_all(&raw)?;
+                for entry in std::fs::read_dir(&dir)?.flatten() {
+                    let p = entry.path();
+                    if p.extension().and_then(|e| e.to_str()) == Some("csv") {
+                        std::fs::copy(&p, raw.join(p.file_name().unwrap()))?;
+                    }
+                }
+            }
+            return convert_all_with_log(log);
+        }
+    }
+
+    Ok(0) // nothing found
+}
+
+fn csv_count(dir: &Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|it| it.flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("csv"))
+            .count())
+        .unwrap_or(0)
+}
+
+fn convert_all_with_log(log: impl Fn(String)) -> Result<usize> {
+    let n = convert_all()?;
+    log(format!("✓ {} playlist(s) ready", n));
+    Ok(n)
+}
+
 // ── Public helpers ────────────────────────────────────────────────────────────
 
 /// List all work CSVs sorted by name

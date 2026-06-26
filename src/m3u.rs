@@ -19,22 +19,32 @@ use crate::import::{list_playlists, load_playlist};
 const MATCH_THRESHOLD: f64 = 0.88;
 const AUDIO_EXTS: &[&str]  = &["flac", "mp3", "opus", "ogg", "aac", "wav", "m4a"];
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Entry points ──────────────────────────────────────────────────────────────
 
+/// CLI version — prints to stdout.
 pub fn run(cfg: &Config, profile_name: Option<&str>) -> Result<()> {
+    run_with_log(cfg, profile_name, |s| println!("{}", s))
+}
+
+/// TUI version — sends progress through a log callback.
+pub fn run_with_log(
+    cfg:          &Config,
+    profile_name: Option<&str>,
+    log:          impl Fn(String),
+) -> Result<()> {
     let profile    = pick_profile(cfg, profile_name)?;
     let music_root = profile.music_root.as_deref().unwrap_or(&cfg.paths.music_root);
     let m3u_dir    = profile.m3u_dir.as_deref().unwrap_or(&cfg.paths.playlists_dir);
 
     std::fs::create_dir_all(m3u_dir)?;
 
-    println!("Scanning {}…", music_root.display());
+    log(format!("Scanning {}…", music_root.display()));
     let library = scan_library(music_root)?;
-    println!("  {} audio files indexed", library.len());
+    log(format!("  · {} audio files indexed", library.len()));
 
     let playlists = list_playlists()?;
     if playlists.is_empty() {
-        println!("No playlists found. Run `s2o import` first.");
+        log("  ⚠ No playlists imported yet — run Import first.".into());
         return Ok(());
     }
 
@@ -44,9 +54,9 @@ pub fn run(cfg: &Config, profile_name: Option<&str>) -> Result<()> {
 
         match generate_m3u(csv_path, &m3u_path, &library, profile, music_root, m3u_dir) {
             Ok((matched, total)) =>
-                println!("  ✓ {} ({}/{} tracks)", name, matched, total),
+                log(format!("  ✓ {} ({}/{} tracks)", name, matched, total)),
             Err(e) =>
-                println!("  ✗ {}: {}", name, e),
+                log(format!("  ✗ {}: {}", name, e)),
         }
     }
     Ok(())

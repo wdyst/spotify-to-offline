@@ -112,7 +112,7 @@ pub fn handle_key(app: &mut App, state: &mut SettingsState, key: KeyEvent) -> bo
             }
         }
         KeyCode::Esc | KeyCode::Char('s') => {
-            app.screen = super::Screen::Menu;
+            app.screen = super::Screen::Home;
             return true;
         }
         _ => {}
