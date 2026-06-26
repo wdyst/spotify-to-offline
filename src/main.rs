@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod dap;
 mod import;
+mod install;
 mod download;
 mod m3u;
 mod tags;
@@ -48,23 +49,32 @@ enum Cmd {
     },
     /// Show current configuration
     Config,
+    /// Install s2o to a permanent location and add to PATH
+    Install,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // First-run: no config yet → wizard
-    if !config::config_path().exists() && !matches!(cli.command, Some(Cmd::Setup)) {
+    // Install doesn't need a config — run it immediately and exit
+    if matches!(cli.command, Some(Cmd::Install)) {
+        return install::run();
+    }
+
+    // First-run: no config yet → wizard (skip for non-interactive commands)
+    let needs_config = !config::config_path().exists();
+    let skip_wizard  = matches!(cli.command, Some(Cmd::Setup) | Some(Cmd::Config));
+    if needs_config && !skip_wizard {
         println!("Welcome to spotify-to-offline! Running first-time setup…\n");
         config::run_setup()?;
         println!();
     }
 
     match cli.command.unwrap_or(Cmd::Ui) {
-        Cmd::Ui                  => ui::run().await?,
-        Cmd::Setup               => config::run_setup()?,
-        Cmd::Import { zip }      => import::run(zip.as_deref()).await?,
+        Cmd::Ui                    => ui::run().await?,
+        Cmd::Setup                 => config::run_setup()?,
+        Cmd::Import { zip }        => import::run(zip.as_deref()).await?,
         Cmd::Download { playlist } => {
             let cfg = config::load()?;
             download::run_all_cli(&cfg, playlist.as_deref()).await?;
@@ -73,7 +83,8 @@ async fn main() -> Result<()> {
             let cfg = config::load()?;
             m3u::run(&cfg, profile.as_deref())?;
         }
-        Cmd::Config => config::show()?,
+        Cmd::Config  => config::show()?,
+        Cmd::Install => unreachable!(), // handled above
     }
 
     Ok(())

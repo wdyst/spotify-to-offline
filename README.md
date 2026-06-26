@@ -23,28 +23,50 @@ s2o m3u        # generate M3U playlists for your DAP
 
 ## Install
 
-### Requirements
+### One-liner (recommended)
 
-- **Soulseek provider**: a free account at [slsknet.org](https://www.slsknet.org) + [slsk-batchdl](https://github.com/fiso64/slsk-batchdl)  
-  (name the binary `sockseek.exe` or `sldl.exe` and drop it next to `s2o.exe` — or point the config at it)
-- **yt-dlp provider** *(optional fallback)*: [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your PATH or configured in Settings
-- **VPN** *(Soulseek only)*: Soulseek is P2P and exposes your real IP to peers.  
-  [Mullvad](https://mullvad.net) or [ProtonVPN](https://protonvpn.com) work great.
+**Windows** — run in PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/kadokonkwo/spotify-to-offline/main/install.ps1 | iex
+```
 
-### Pre-built binary
+**Linux / macOS** — run in your terminal:
+```bash
+curl -fsSL https://raw.githubusercontent.com/kadokonkwo/spotify-to-offline/main/install.sh | bash
+```
 
-Grab `s2o.exe` from [Releases](../../releases) — no Rust, no runtime, no dependencies. Drop it anywhere.
+This downloads the latest pre-built binary, copies it to a permanent location, and adds it to your PATH. Open a new terminal and `s2o` is ready.
+
+### Manual install
+
+1. Download the binary for your platform from [Releases](../../releases):
+   - `s2o-windows-x64.exe`
+   - `s2o-linux-x64`
+   - `s2o-macos-x64` / `s2o-macos-arm64`
+2. Run it once with the `install` subcommand:
+   ```
+   s2o-windows-x64.exe install   # Windows
+   ./s2o-linux-x64 install       # Linux / macOS
+   ```
+   This copies the binary to `%LOCALAPPDATA%\s2o\bin\` (Windows) or `~/.local/bin/` (Linux/macOS) and adds it to your PATH automatically.
 
 ### Build from source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/spotify-to-offline
+git clone https://github.com/kadokonkwo/spotify-to-offline
 cd spotify-to-offline
 cargo build --release
-# binary at target/release/s2o.exe
+.\target\release\s2o.exe install   # Windows
+./target/release/s2o install       # Linux / macOS
 ```
 
-Requires Rust + MinGW (Windows) or GCC (Linux/macOS). The release binary is fully self-contained.
+Requires Rust + a C toolchain (MinGW on Windows, GCC/Clang on Linux/macOS). The release binary is fully self-contained — no Rust or runtime needed on the target machine.
+
+### Download provider requirements
+
+- **Soulseek**: free account at [slsknet.org](https://www.slsknet.org) + [slsk-batchdl](https://github.com/fiso64/slsk-batchdl) — drop `sldl.exe` / `sockseek.exe` next to `s2o.exe` or configure its path in Settings
+- **yt-dlp** *(optional fallback)*: [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your PATH
+- **VPN** *(Soulseek only)*: Soulseek is P2P — [Mullvad](https://mullvad.net) or [ProtonVPN](https://protonvpn.com) recommended
 
 ---
 
