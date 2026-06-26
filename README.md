@@ -1,12 +1,12 @@
 # spotify-to-offline
 
-Move your Spotify playlists to a local FLAC library, then generate M3U playlist files ready for a portable music player (tested on Snowsky Echo Mini).
+Move your Spotify playlists to a local FLAC library, then generate M3U playlist files
+ready for a portable music player (tested on Snowsky Echo Mini).
 
 **What it does:**
-1. Reads your [Exportify](https://exportify.net) CSV exports
-2. Converts them to a format [Sockseek](https://github.com/fiso64/slsk-batchdl) (formerly sldl) can consume
-3. Batch-downloads every track from Soulseek, preferring FLAC, skipping anything you already own
-4. Generates M3U playlist files with relative paths so they work on any DAP or media player
+1. Exports your Spotify playlists via [Exportify](https://exportify.net)
+2. Batch-downloads every track from Soulseek, preferring FLAC, skipping anything you already own
+3. Generates M3U playlist files with relative paths so they work on any DAP or media player
 
 ---
 
@@ -15,109 +15,85 @@ Move your Spotify playlists to a local FLAC library, then generate M3U playlist 
 - **Windows** (scripts use PowerShell; the Python files work cross-platform)
 - **Python 3.8+** — no third-party packages needed (stdlib only)
 - **A Soulseek account** — free at [slsknet.org](https://www.slsknet.org)
-- **Your Spotify playlists exported via [Exportify](https://exportify.net)** — log in with Spotify, export all playlists as a ZIP of CSVs
+- **A VPN** — Soulseek is P2P and exposes your IP to peers.
+  [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com) are solid P2P-friendly options.
 
 ---
 
 ## Quick Start
 
-```powershell
-# 1. Clone the repo somewhere convenient
-git clone https://github.com/wdyst/spotify-to-offline
-cd spotify-to-offline
-
-# 2. Extract your Exportify ZIP (adjust path to wherever you saved it)
-Expand-Archive -Path "C:\path\to\spotify_playlists.zip" -DestinationPath ".\playlists_raw" -Force
-
-# 3. Install Sockseek
-powershell -ExecutionPolicy Bypass -File "1_setup_sldl.ps1"
-
-# 4. Convert CSVs
-python "2_prep_csvs.py"
-
-# 5. Edit credentials, then download (takes hours for large libraries)
-notepad "3_download_all.ps1"   # fill in SlskUser / SlskPass at the top
-powershell -ExecutionPolicy Bypass -File "3_download_all.ps1"
-
-# 6. After downloading, generate M3U playlists
-python "4_generate_m3u.py"
 ```
+1. Clone or download this repo
+2. Double-click run.bat
+3. Follow the menu
+```
+
+That's it. The launcher walks you through every step.
 
 ---
 
-## Detailed Steps
 
-### Step 1 — Export from Spotify
+## Using the Launcher
 
-1. Go to [exportify.net](https://exportify.net) and sign in with Spotify
-2. Click **Export All** to download a ZIP of CSVs (one file per playlist)
-3. Save the ZIP somewhere you can find it
+Double-click **`run.bat`** (or run `python run.py` in a terminal). You'll see a menu:
 
-### Step 2 — Set up the tools
+```
+  +----------------------------------------------+
+  |          spotify-to-offline  v1.0            |
+  |      Spotify -> FLAC -> Snowsky / DAP        |
+  +----------------------------------------------+
 
-```powershell
-# Extract your Exportify ZIP into playlists_raw\
-Expand-Archive -Path "C:\path\to\spotify_playlists.zip" -DestinationPath ".\playlists_raw" -Force
-
-# Download and install Sockseek (the Soulseek batch downloader)
-powershell -ExecutionPolicy Bypass -File "1_setup_sldl.ps1"
+  [1]  Set Soulseek credentials
+  [2]  Import playlists  (opens Exportify in browser)
+  [3]  Download FLACs from Soulseek
+  [4]  Generate M3U files for Snowsky / DAP
+  [5]  Full run  (steps 1-4 in sequence)
+  [q]  Quit
 ```
 
-### Step 3 — Convert playlist CSVs
+### Step 1 — Set Soulseek credentials
 
-```powershell
-python 2_prep_csvs.py
-```
+Enter your Soulseek username and password. These are saved locally to `config.ini`
+(gitignored — never committed) so you only need to do this once.
 
-This reads every CSV from `playlists_raw\`, renames columns to what Sockseek expects,
-converts duration from milliseconds to seconds, and writes cleaned CSVs to `playlists_sldl\`.
-It also produces `playlists_sldl\00_all_tracks.csv` — a deduplicated master list of every
-unique track across all your playlists.
+Don't have an account? Sign up free at [slsknet.org](https://www.slsknet.org).
 
-### Step 4 — Download
+### Step 2 — Import playlists
 
-Open `3_download_all.ps1` in any text editor and fill in your credentials at the top:
+The launcher opens [exportify.net](https://exportify.net) in your browser. Sign in with
+Spotify and click **Export All** to download a ZIP of CSVs (one per playlist).
 
-```powershell
-$SlskUser = "your_soulseek_username"
-$SlskPass = "your_soulseek_password"
-```
+Drag the downloaded ZIP into the terminal window when prompted, or paste the path.
+The launcher extracts and converts everything automatically.
 
-Then run it:
+### Step 3 — Download FLACs
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "3_download_all.ps1"
-```
+> **⚠ Connect to a VPN before this step.** Soulseek is peer-to-peer — your real IP address
+> is visible to every user you download from.
 
-> **⚠ Connect to a VPN first.** Soulseek is P2P and your real IP is visible to every peer
-> you download from. [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com)
-> are solid choices that don't throttle P2P traffic.
+The launcher runs [Sockseek](https://github.com/fiso64/slsk-batchdl) against each playlist
+in sequence. Downloads land in `C:\Users\<you>\Music\{Artist}\{Album}\{Title}.flac`.
 
-Downloads go to `C:\Users\<you>\Music\{Artist}\{Album}\{Title}.flac` by default.
-Edit `$MusicRoot` in the script to change the destination.
+- Prefers FLAC; falls back to MP3/M4A if lossless isn't available
+- Skips tracks already in your music library
+- **Ctrl+C** pauses — run option 3 again to resume exactly where you left off
 
-**You can stop and restart at any time** — Sockseek tracks what's already downloaded and skips those files.
+Large libraries (1000+ tracks) will take several hours. Leave it running overnight.
 
-Sockseek prefers FLAC but falls back to MP3/M4A if no lossless copy is available on the network.
-It also cross-references your existing music library and skips tracks you already own.
-
-### Step 5 — Generate M3U playlists
-
-```powershell
-python 4_generate_m3u.py
-```
+### Step 4 — Generate M3U files
 
 Scans your music library, fuzzy-matches each playlist track to a local file, and writes
 one `.m3u` file per playlist to `C:\Users\<you>\Music\Playlists\`.
 
 M3U paths are **relative** (e.g. `../Artist/Album/title.flac`) so the playlist files
-work correctly whether you're on your PC or on a DAP's SD card.
+work correctly on your PC and on a DAP's SD card without any editing.
 
-Any tracks that couldn't be matched are logged to `m3u_unmatched.txt` for review.
+Any tracks that couldn't be matched are logged to `m3u_unmatched.txt` for manual review.
 
-Re-run this script any time you add more music — it always reflects your current library.
+Re-run option 4 any time you add more music — it always reflects your current library.
 
 ---
+
 
 ## Output Structure
 
@@ -125,13 +101,13 @@ Re-run this script any time you add more music — it always reflects your curre
 Music\
 ├── Artist Name\
 │   └── Album Name\
-│       └── Track Title.flac        <- new downloads
-├── blink-182\                       <- existing library (any structure works)
+│       └── Track Title.flac        ← downloaded by Sockseek
+├── blink-182\                        ← existing library (any structure works)
 │   └── ...
 └── Playlists\
     ├── Liked_Songs.m3u
     ├── pop_punk.m3u
-    └── ...                         <- one file per playlist, Snowsky-ready
+    └── ...                          ← one file per playlist, Snowsky-ready
 ```
 
 ---
@@ -151,14 +127,27 @@ This should also work with FiiO, Hiby, Shanling, and other DAPs that support M3U
 
 ## Configuration
 
-All paths are set at the top of each script. Key variables:
+All paths are set at the top of each script. The launcher stores credentials in `config.ini`
+(gitignored). Key path variables:
 
 | Script | Variable | Default |
 |---|---|---|
 | `3_download_all.ps1` | `$MusicRoot` | `C:\Users\<you>\Music` |
-| `3_download_all.ps1` | `$PlaylistsDir` | `$MusicRoot\Playlists` |
 | `4_generate_m3u.py` | `MUSIC_ROOT` | `C:\Users\<you>\Music` |
 | `4_generate_m3u.py` | `PLAYLIST_DIR` | `C:\Users\<you>\Music\Playlists` |
+
+---
+
+## Advanced / Manual Use
+
+The individual scripts still work if you prefer to run steps directly:
+
+| Script | What it does |
+|---|---|
+| `1_setup_sldl.ps1` | Downloads and installs Sockseek |
+| `2_prep_csvs.py` | Converts Exportify CSVs to Sockseek format |
+| `3_download_all.ps1` | Runs Sockseek against all playlists (edit creds at top) |
+| `4_generate_m3u.py` | Generates M3U playlist files |
 
 ---
 
@@ -174,8 +163,8 @@ All paths are set at the top of each script. Key variables:
   after generating M3Us and source those manually (Bandcamp, direct purchase, etc.).
 - **yt-dlp fallback:** Sockseek supports `--yt-dlp` to fall back to YouTube for tracks not
   found on Soulseek. Requires [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your PATH.
-- **Re-running:** Both `3_download_all.ps1` and `4_generate_m3u.py` are safe to re-run.
-  Downloads skip existing files; M3Us are fully regenerated each time.
+- **Re-running:** All steps are safe to re-run. Downloads skip existing files; M3Us are
+  fully regenerated each time.
 
 ---
 
