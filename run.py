@@ -35,7 +35,7 @@ def banner():
 
 # ── config ────────────────────────────────────────────────────────────────────
 def load_cfg():
-    c = configparser.ConfigParser()
+    c = configparser.RawConfigParser()   # RawConfigParser: no % interpolation
     if os.path.exists(CONFIG_FILE):
         c.read(CONFIG_FILE, encoding='utf-8')
     return c
