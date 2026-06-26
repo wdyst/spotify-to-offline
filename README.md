@@ -23,7 +23,7 @@ Move your Spotify playlists to a local FLAC library, then generate M3U playlist 
 
 ```powershell
 # 1. Clone the repo somewhere convenient
-git clone https://github.com/YOUR_USERNAME/spotify-to-offline
+git clone https://github.com/wdyst/spotify-to-offline
 cd spotify-to-offline
 
 # 2. Extract your Exportify ZIP (adjust path to wherever you saved it)
@@ -88,6 +88,10 @@ Then run it:
 ```powershell
 powershell -ExecutionPolicy Bypass -File "3_download_all.ps1"
 ```
+
+> **⚠ Connect to a VPN first.** Soulseek is P2P and your real IP is visible to every peer
+> you download from. [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com)
+> are solid choices that don't throttle P2P traffic.
 
 Downloads go to `C:\Users\<you>\Music\{Artist}\{Album}\{Title}.flac` by default.
 Edit `$MusicRoot` in the script to change the destination.
@@ -160,6 +164,10 @@ All paths are set at the top of each script. Key variables:
 
 ## Notes
 
+- **Use a VPN:** Soulseek is peer-to-peer — your real IP address is visible to every user
+  you download from. Connect to a VPN before starting downloads.
+  [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com) are popular
+  privacy-focused options that work well with P2P traffic.
 - **Rate limits:** Sockseek searches Soulseek at a conservative rate by default. Pushing
   `--searches-per-time` too high can result in temporary 30-minute bans.
 - **Niche tracks:** Obscure songs may not be available on Soulseek. Check `m3u_unmatched.txt`

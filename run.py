@@ -136,6 +136,8 @@ def step_download(username, password):
     os.makedirs(PLAYLISTS_DIR, exist_ok=True)
     total = len(csvs)
     print(f"  {total} playlists | destination: {D}{MUSIC_ROOT}{X}")
+    print(f"  {R}⚠  VPN recommended:{X} Soulseek exposes your IP to peers — connect before downloading.")
+    print(f"     {D}Mullvad / ProtonVPN work well. Already on one? Carry on.{X}")
     print(f"  {Y}This takes hours. Ctrl+C pauses — restart to resume where you left off.{X}\n")
 
     for i, csv_path in enumerate(csvs, 1):
