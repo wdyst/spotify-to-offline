@@ -1,22 +1,25 @@
 # spotify-to-offline
 
 Move your Spotify playlists to a local FLAC library, then generate M3U playlist files
-ready for a portable music player (tested on Snowsky Echo Mini).
+ready for any portable music player. Tested on the Snowsky Echo Mini; works on FiiO,
+Hiby, Shanling, and anything else that reads M3U.
 
 **What it does:**
 1. Exports your Spotify playlists via [Exportify](https://exportify.net)
-2. Batch-downloads every track from Soulseek, preferring FLAC, skipping anything you already own
-3. Generates M3U playlist files with relative paths so they work on any DAP or media player
+2. Batch-downloads every track from your configured provider (Soulseek, yt-dlp, or custom)
+3. Generates M3U playlist files with relative paths that work on any DAP or SD card
 
 ---
 
 ## Requirements
 
-- **Windows** (scripts use PowerShell; the Python files work cross-platform)
 - **Python 3.8+** — no third-party packages needed (stdlib only)
-- **A Soulseek account** — free at [slsknet.org](https://www.slsknet.org)
-- **A VPN** — Soulseek is P2P and exposes your IP to peers.
-  [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com) are solid P2P-friendly options.
+- **A download provider** — pick one:
+  - **Soulseek** (default): free account at [slsknet.org](https://www.slsknet.org) + [Sockseek](https://github.com/fiso64/slsk-batchdl) (installed automatically)
+  - **yt-dlp**: `pip install yt-dlp` or [github.com/yt-dlp/yt-dlp](https://github.com/yt-dlp/yt-dlp)
+  - **Custom**: any command you want — set a template in Settings
+- **A VPN** *(Soulseek only)*: Soulseek is P2P and exposes your IP to peers.
+  [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com) are solid choices.
 
 ---
 
@@ -24,7 +27,7 @@ ready for a portable music player (tested on Snowsky Echo Mini).
 
 ```
 1. Clone or download this repo
-2. Double-click run.bat
+2. Double-click run.bat  (Windows)  OR  ./run.sh  (Linux / macOS)
 3. Follow the menu
 ```
 
@@ -32,109 +35,151 @@ That's it. The launcher walks you through every step.
 
 ---
 
-
-## Using the Launcher
-
-Double-click **`run.bat`** (or run `python run.py` in a terminal). You'll see a menu:
+## The Menu
 
 ```
-  +----------------------------------------------+
-  |          spotify-to-offline  v1.0            |
-  |      Spotify -> FLAC -> Snowsky / DAP        |
-  +----------------------------------------------+
+  +------------------------------------------------+
+  |           spotify-to-offline  v2.0             |
+  |       Spotify -> FLAC -> Snowsky / DAP         |
+  +------------------------------------------------+
 
   [1]  Set Soulseek credentials
-  [2]  Import playlists  (opens Exportify in browser)
-  [3]  Download FLACs from Soulseek
-  [4]  Generate M3U files for Snowsky / DAP
-  [5]  Full run  (steps 1-4 in sequence)
+  [2]  Install Sockseek
+  [3]  Import playlists  (opens Exportify in browser)
+  [4]  Download  (via configured provider)
+  [5]  Generate M3U files for Snowsky / DAP
+  [6]  Full run  (steps 3 → 4 → 5)
+  ──────────────────────────────────────────────────
+  [s]  Settings  (paths, provider, custom commands)
   [q]  Quit
 ```
 
-### Step 1 — Set Soulseek credentials
 
-Enter your Soulseek username and password. These are saved locally to `config.ini`
-(gitignored — never committed) so you only need to do this once.
+## Step-by-step
 
-Don't have an account? Sign up free at [slsknet.org](https://www.slsknet.org).
+### [1] Set Soulseek credentials
 
-### Step 2 — Import playlists
+Enter your username and password — saved to `config.ini` (gitignored, never committed).
+Only needed once. Skip this if you're using yt-dlp or a custom provider.
 
-The launcher opens [exportify.net](https://exportify.net) in your browser. Sign in with
-Spotify and click **Export All** to download a ZIP of CSVs (one per playlist).
+### [2] Install Sockseek
 
-Drag the downloaded ZIP into the terminal window when prompted, or paste the path.
-The launcher extracts and converts everything automatically.
+Downloads the correct [Sockseek](https://github.com/fiso64/slsk-batchdl) binary for your OS
+(Windows, Linux, or macOS) and drops it in the script folder. Skip if using yt-dlp.
 
-### Step 3 — Download FLACs
+### [3] Import playlists
 
-> **⚠ Connect to a VPN before this step.** Soulseek is peer-to-peer — your real IP address
-> is visible to every user you download from.
+Opens [exportify.net](https://exportify.net) in your browser. Sign in with Spotify and click
+**Export All** to get a ZIP of CSVs. Drag the ZIP into the terminal when prompted — the
+launcher extracts and converts everything automatically.
 
-The launcher runs [Sockseek](https://github.com/fiso64/slsk-batchdl) against each playlist
-in sequence. Downloads land in `C:\Users\<you>\Music\{Artist}\{Album}\{Title}.flac`.
+### [4] Download
 
-- Prefers FLAC; falls back to MP3/M4A if lossless isn't available
-- Skips tracks already in your music library
-- **Ctrl+C** pauses — run option 3 again to resume exactly where you left off
+> **⚠ Connect to a VPN before this step if using Soulseek.** It's P2P and your real IP is
+> visible to every peer you download from.
 
-Large libraries (1000+ tracks) will take several hours. Leave it running overnight.
+Runs your configured provider against each playlist in sequence.
 
-### Step 4 — Generate M3U files
+- **Soulseek**: prefers FLAC, falls back to MP3/M4A if lossless isn't on the network
+- **yt-dlp**: searches YouTube Music per track and downloads as FLAC
+- **Custom**: runs your command template for each track
 
-Scans your music library, fuzzy-matches each playlist track to a local file, and writes
-one `.m3u` file per playlist to `C:\Users\<you>\Music\Playlists\`.
+Downloads land in your configured music root (`~/Music` by default), organised as
+`Artist/Album/Title.flac`. Already-downloaded tracks are skipped — **Ctrl+C** pauses safely
+and you can resume any time by running option 4 again.
 
-M3U paths are **relative** (e.g. `../Artist/Album/title.flac`) so the playlist files
-work correctly on your PC and on a DAP's SD card without any editing.
+Large libraries (1000+ tracks) will take several hours. Leave it overnight.
 
-Any tracks that couldn't be matched are logged to `m3u_unmatched.txt` for manual review.
+### [5] Generate M3U
 
-Re-run option 4 any time you add more music — it always reflects your current library.
+Scans your music library, fuzzy-matches each playlist track to a local file, and writes one
+`.m3u` per playlist to your playlists directory (`~/Music/Playlists` by default).
+
+Paths are **relative** (e.g. `../Artist/Album/title.flac`) so they work on your PC and on
+a DAP's SD card without any editing. Unmatched tracks go to `m3u_unmatched.txt`.
+
+Re-run any time you add music — it always reflects what's actually on disk.
 
 ---
 
+## Settings  `[s]`
+
+| Setting | Default | Description |
+|---|---|---|
+| Music root | `~/Music` | Where downloads and existing files live |
+| Playlists dir | `~/Music/Playlists` | Where M3U files are written |
+| Provider | `soulseek` | `soulseek`, `ytdlp`, or `custom` |
+| Sockseek path | *(auto)* | Path to sockseek binary if not in script folder |
+| yt-dlp path | `yt-dlp` | Path or command name for yt-dlp |
+| Custom command | — | Command template with `{artist}` `{title}` `{album}` `{output}` |
+
+All settings are saved to `config.ini` (gitignored).
+
+### Example: custom provider
+
+Set a custom command like:
+
+```
+yt-dlp "ytsearch1:{artist} {title}" -x --audio-format flac -o {output}/{artist}/{title}.%(ext)s
+```
+
+Or use any other tool that can take artist/title/album/output arguments.
+
+---
 
 ## Output Structure
 
 ```
-Music\
-├── Artist Name\
-│   └── Album Name\
-│       └── Track Title.flac        ← downloaded by Sockseek
-├── blink-182\                        ← existing library (any structure works)
+Music/
+├── Artist Name/
+│   └── Album Name/
+│       └── Track Title.flac      ← downloaded
+├── blink-182/                     ← existing library (any structure works)
 │   └── ...
-└── Playlists\
+└── Playlists/
     ├── Liked_Songs.m3u
     ├── pop_punk.m3u
-    └── ...                          ← one file per playlist, Snowsky-ready
+    └── ...                        ← one per playlist, DAP-ready
 ```
 
 ---
 
+
 ## Snowsky Echo Mini Setup
 
-1. Copy everything inside your `Music\` folder to the **root of your SD card**
-2. The `Playlists\` folder should sit at the same level as your artist folders
-3. Insert the card and navigate to Playlists in the player menu
+1. Copy your `Music/` folder contents to the **root of your SD card**
+2. The `Playlists/` folder should be at the same level as your artist folders
+3. Insert the card — navigate to Playlists in the player menu
 
-The M3U files use relative paths (`../Artist/Album/title.flac`) so they resolve
-correctly regardless of the card's drive letter or mount point.
-
-This should also work with FiiO, Hiby, Shanling, and other DAPs that support M3U playlists.
+The relative paths in the M3U files resolve correctly regardless of the card's drive letter
+or mount point. Should also work on FiiO, Hiby, Shanling, and other DAPs with M3U support.
 
 ---
 
-## Configuration
+## Linux / macOS
 
-All paths are set at the top of each script. The launcher stores credentials in `config.ini`
-(gitignored). Key path variables:
+All Python scripts are fully cross-platform. The shell entry point is `run.sh`:
 
-| Script | Variable | Default |
-|---|---|---|
-| `3_download_all.ps1` | `$MusicRoot` | `C:\Users\<you>\Music` |
-| `4_generate_m3u.py` | `MUSIC_ROOT` | `C:\Users\<you>\Music` |
-| `4_generate_m3u.py` | `PLAYLIST_DIR` | `C:\Users\<you>\Music\Playlists` |
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+Sockseek is available for Linux and macOS — option 2 (Install Sockseek) downloads the
+correct binary automatically.
+
+---
+
+## Rust Rewrite (WIP)
+
+A Rust port is in progress. See [RUST_REWRITE.md](RUST_REWRITE.md) for status.
+The Python implementation remains the primary, fully functional version.
+
+```bash
+# Build (once Rust port is complete)
+cargo build --release
+./target/release/s2o
+```
 
 ---
 
@@ -144,25 +189,24 @@ The individual scripts still work if you prefer to run steps directly:
 
 | Script | What it does |
 |---|---|
-| `1_setup_sldl.ps1` | Downloads and installs Sockseek |
+| `1_setup.py` | Cross-platform Sockseek installer (Windows / Linux / macOS) |
+| `1_setup_sldl.ps1` | PowerShell Sockseek installer (Windows only, legacy) |
 | `2_prep_csvs.py` | Converts Exportify CSVs to Sockseek format |
-| `3_download_all.ps1` | Runs Sockseek against all playlists (edit creds at top) |
-| `4_generate_m3u.py` | Generates M3U playlist files |
+| `3_download_all.ps1` | Batch download via Sockseek (Windows, edit creds at top) |
+| `4_generate_m3u.py` | Generates M3U files — respects `MUSIC_ROOT` and `PLAYLISTS_DIR` env vars |
 
 ---
 
 ## Notes
 
-- **Use a VPN:** Soulseek is peer-to-peer — your real IP address is visible to every user
-  you download from. Connect to a VPN before starting downloads.
-  [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com) are popular
-  privacy-focused options that work well with P2P traffic.
-- **Rate limits:** Sockseek searches Soulseek at a conservative rate by default. Pushing
-  `--searches-per-time` too high can result in temporary 30-minute bans.
-- **Niche tracks:** Obscure songs may not be available on Soulseek. Check `m3u_unmatched.txt`
-  after generating M3Us and source those manually (Bandcamp, direct purchase, etc.).
-- **yt-dlp fallback:** Sockseek supports `--yt-dlp` to fall back to YouTube for tracks not
-  found on Soulseek. Requires [yt-dlp](https://github.com/yt-dlp/yt-dlp) on your PATH.
+- **VPN:** Soulseek is P2P — your real IP is visible to every peer you download from.
+  [Mullvad](https://mullvad.net) and [ProtonVPN](https://protonvpn.com) work well.
+- **Rate limits:** Sockseek searches at a conservative rate by default. Pushing
+  `--searches-per-time` too high risks temporary 30-minute bans.
+- **Niche tracks:** Check `m3u_unmatched.txt` for anything Soulseek couldn't find — source
+  those via Bandcamp, direct purchase, or switch to yt-dlp as a fallback provider.
+- **yt-dlp fallback:** Sockseek also supports `--yt-dlp` natively to fall back to YouTube
+  for tracks not found on Soulseek. Requires yt-dlp on your PATH.
 - **Re-running:** All steps are safe to re-run. Downloads skip existing files; M3Us are
   fully regenerated each time.
 

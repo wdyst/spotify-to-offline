@@ -2,9 +2,14 @@
 playlists_raw/
 playlists_sldl/
 
-# Binary — download via 1_setup_sldl.ps1
+# Binaries — downloaded at setup time
 sockseek.exe
+sockseek
 sldl.exe
+sldl
+
+# Rust build output
+/target/
 
 # Runtime output
 download_log.txt

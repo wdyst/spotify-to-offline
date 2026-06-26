@@ -22,7 +22,9 @@ sys.stdout.reconfigure(encoding='utf-8')
 # ---------------------------------------------------------------------------
 _USERMUSIC   = os.path.join(os.path.expanduser("~"), "Music")
 MUSIC_ROOT   = os.environ.get("MUSIC_ROOT",   _USERMUSIC)
-PLAYLIST_DIR = os.environ.get("PLAYLIST_DIR", os.path.join(MUSIC_ROOT, "Playlists"))
+PLAYLIST_DIR = (os.environ.get("PLAYLISTS_DIR")
+                or os.environ.get("PLAYLIST_DIR")
+                or os.path.join(MUSIC_ROOT, "Playlists"))
 
 _HERE    = os.path.dirname(os.path.abspath(__file__))
 CSV_DIR  = os.path.join(_HERE, "playlists_sldl")
