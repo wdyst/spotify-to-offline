@@ -11,8 +11,8 @@
 # ============================================================
 #   YOUR SOULSEEK CREDENTIALS  (fill these in)
 # ============================================================
-$SlskUser = "YOUR_SOULSEEK_USERNAME"
-$SlskPass = "YOUR_SOULSEEK_PASSWORD"
+$SlskUser = "ohwhattheheck"
+$SlskPass = "6n2T7%E7hR^MSP^"
 # ============================================================
 
 $ToolDir      = $PSScriptRoot                        # folder containing this script

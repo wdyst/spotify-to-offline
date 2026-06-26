@@ -1,24 +1,46 @@
 [package]
 name    = "spotify-to-offline"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 description = "Spotify → FLAC → DAP: batch-download playlists and generate M3U files"
 license     = "MIT"
-readme      = "README.md"
-
-# See RUST_REWRITE.md for porting status and roadmap.
-# Current status: scaffold only — use run.py / run.bat / run.sh in the meantime.
 
 [[bin]]
 name = "s2o"
 path = "src/main.rs"
 
 [dependencies]
-clap      = { version = "4",   features = ["derive"] }
-serde     = { version = "1",   features = ["derive"] }
-toml      = "0.8"
-colored   = "2"
-indicatif = "0.17"
-csv       = "1.3"
-dirs      = "5"
-anyhow    = "1"
+# Core
+anyhow        = "1"
+thiserror     = "1"
+clap          = { version = "4", features = ["derive"] }
+serde         = { version = "1", features = ["derive"] }
+toml          = "0.8"
+dirs          = "5"
+which         = "6"
+
+# TUI
+ratatui       = "0.28"
+crossterm     = "0.28"
+
+# Async
+tokio         = { version = "1", features = ["full"] }
+async-trait   = "0.1"
+
+# Data
+csv           = "1.3"
+rusqlite      = { version = "0.31", features = ["bundled"] }
+zip           = "2"
+chrono        = { version = "0.4", features = ["serde"] }
+
+# Audio tags
+lofty         = "0.21"
+
+# Fuzzy matching
+strsim        = "0.11"
+
+# Notifications
+notify-rust   = "4"
+
+# Unicode layout
+unicode-width = "0.1"

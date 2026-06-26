@@ -1,48 +1,80 @@
-//! spotify-to-offline — Rust rewrite (work in progress)
-//!
-//! This is a scaffold for the Rust port of `run.py`.
-//! See RUST_REWRITE.md for the porting plan and status.
-//!
-//! Until the rewrite is complete, use:
-//!   Windows : run.bat   or   python run.py
-//!   Linux   : ./run.sh  or   python3 run.py
-
 mod config;
+mod db;
+mod dap;
+mod import;
+mod download;
+mod m3u;
+mod tags;
+mod notify;
 mod providers;
 mod ui;
 
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "s2o", about = "Spotify → FLAC → DAP", version)]
+#[command(
+    name    = "s2o",
+    about   = "spotify-to-offline — Spotify → FLAC → DAP",
+    version = "2.0.0",
+)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
-enum Commands {
-    /// Interactive menu (default)
-    Menu,
-    /// Download playlists via configured provider
-    Download {
-        /// Override provider (soulseek, ytdlp, custom)
-        #[arg(short, long)]
-        provider: Option<String>,
+enum Cmd {
+    /// Interactive TUI (default)
+    Ui,
+    /// First-time setup wizard
+    Setup,
+    /// Import playlists from an Exportify ZIP
+    Import {
+        /// Path to the Exportify ZIP file (prompted if omitted)
+        zip: Option<String>,
     },
-    /// Generate M3U playlist files from local library
-    M3u,
+    /// Download tracks via configured provider(s)
+    Download {
+        /// Only process this playlist (CSV filename without extension)
+        #[arg(short, long)]
+        playlist: Option<String>,
+    },
+    /// Generate M3U playlist files
+    M3u {
+        /// DAP profile to use (defaults to first in config)
+        #[arg(short, long)]
+        profile: Option<String>,
+    },
     /// Show current configuration
     Config,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    match cli.command.unwrap_or(Commands::Menu) {
-        Commands::Menu          => ui::run_menu(),
-        Commands::Download { .. } => todo!("Download not yet implemented — use run.py"),
-        Commands::M3u           => todo!("M3U generation not yet implemented — use 4_generate_m3u.py"),
-        Commands::Config        => config::show(),
+    // First-run: no config yet → wizard
+    if !config::config_path().exists() && !matches!(cli.command, Some(Cmd::Setup)) {
+        println!("Welcome to spotify-to-offline! Running first-time setup…\n");
+        config::run_setup()?;
+        println!();
     }
+
+    match cli.command.unwrap_or(Cmd::Ui) {
+        Cmd::Ui                  => ui::run().await?,
+        Cmd::Setup               => config::run_setup()?,
+        Cmd::Import { zip }      => import::run(zip.as_deref()).await?,
+        Cmd::Download { playlist } => {
+            let cfg = config::load()?;
+            download::run_all_cli(&cfg, playlist.as_deref()).await?;
+        }
+        Cmd::M3u { profile } => {
+            let cfg = config::load()?;
+            m3u::run(&cfg, profile.as_deref())?;
+        }
+        Cmd::Config => config::show()?,
+    }
+
+    Ok(())
 }

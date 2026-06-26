@@ -1,6 +1,8 @@
 # Personal playlist data — don't commit your listening history
 playlists_raw/
 playlists_sldl/
+python_legacy/playlists_raw/
+python_legacy/playlists_sldl/
 
 # Binaries — downloaded at setup time
 sockseek.exe
