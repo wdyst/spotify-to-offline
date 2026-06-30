@@ -83,7 +83,7 @@ async fn run_sockseek(
         "--user",          username,
         "--pass",          password,
         "-p",              &output_dir.to_string_lossy(),
-        "--skip-music-dir",
+        "--skip-music-dir", &output_dir.to_string_lossy(),
         "--write-playlist",
         "--playlist-path", &m3u_path.to_string_lossy(),
         "--artist-col",    "artist",
@@ -123,13 +123,8 @@ async fn run_sockseek(
     // Anything higher is a real error (bad credentials, binary crash, etc.).
     if status.code().unwrap_or(0) > 1 {
         bail!(
-            "sockseek exited with code {}{}",
+            "sockseek exited with code {} (bad credentials, connection failure, or bad args)",
             status.code().unwrap_or(-1),
-            if status.code() == Some(2) {
-                " (bad credentials or connection failure?)"
-            } else {
-                ""
-            }
         );
     }
 

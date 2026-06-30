@@ -33,6 +33,8 @@ pub enum Event {
     ImportDone    { count: usize },
     /// Emitted by an M3U generation task when it completes
     M3uDone,
+    /// Emitted when the sldl auto-download finishes
+    SldlDone { ok: bool },
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -163,7 +165,16 @@ async fn download_playlist(
     for (i, provider) in providers.iter().enumerate() {
         match provider.download_playlist(csv_path, &output_dir, &log_tx).await {
             Err(e) => {
-                log(event_tx, &format!("  ⚠ {} error: {}", provider.name(), e));
+                let msg = e.to_string();
+                log(event_tx, &format!("  ⚠ {} error: {}", provider.name(), msg));
+                // Hint the user toward auto-install when the binary is simply missing
+                let lower = msg.to_lowercase();
+                if lower.contains("not found") || lower.contains("no such file")
+                    || lower.contains("cannot find") || lower.contains("os error 2")
+                {
+                    log(event_tx,
+                        "    → sldl not installed — press [s] › scroll to 'Download sldl' › Enter");
+                }
                 continue;
             }
             Ok(results) => {

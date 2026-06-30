@@ -41,6 +41,12 @@ pub struct Config {
     pub notifications: NotifyConfig,
     #[serde(default = "default_profiles")]
     pub dap_profiles:  Vec<DapProfile>,
+    /// Show raw sldl output instead of filtered friendly lines.
+    #[serde(default)]
+    pub verbose_logs:  bool,
+    /// Automatically write a log file to music_root on exit.
+    #[serde(default)]
+    pub auto_save_log: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -112,7 +118,9 @@ impl Default for Config {
                 on_completion:        true,
                 on_quality_downgrade: true,
             },
-            dap_profiles: default_profiles(),
+            dap_profiles:  default_profiles(),
+            verbose_logs:  false,
+            auto_save_log: false,
         }
     }
 }

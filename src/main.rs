@@ -8,6 +8,7 @@ mod m3u;
 mod tags;
 mod notify;
 mod providers;
+mod sldl_setup;
 mod ui;
 
 use anyhow::Result;

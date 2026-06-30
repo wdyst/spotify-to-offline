@@ -19,17 +19,27 @@ const EDIT:   Color = Color::Yellow;
 // ── Setting entry ─────────────────────────────────────────────────────────────
 
 struct Entry {
-    label:   &'static str,
-    value:   String,
-    editable: bool,
+    label:     &'static str,
+    value:     String,
+    editable:  bool,
+    /// Action entries run a side-effect on Enter instead of opening an editor.
+    is_action: bool,
+    /// Password fields — display as bullets, mask the edit buffer too.
+    masked:    bool,
 }
 
 impl Entry {
     fn new(label: &'static str, value: impl ToString) -> Self {
-        Entry { label, value: value.to_string(), editable: true }
+        Entry { label, value: value.to_string(), editable: true,  is_action: false, masked: false }
     }
     fn ro(label: &'static str, value: impl ToString) -> Self {
-        Entry { label, value: value.to_string(), editable: false }
+        Entry { label, value: value.to_string(), editable: false, is_action: false, masked: false }
+    }
+    fn action(label: &'static str, value: impl ToString) -> Self {
+        Entry { label, value: value.to_string(), editable: false, is_action: true,  masked: false }
+    }
+    fn secret(label: &'static str, value: impl ToString) -> Self {
+        Entry { label, value: value.to_string(), editable: true,  is_action: false, masked: true  }
     }
 }
 
@@ -63,6 +73,7 @@ fn build_entries(cfg: &Config) -> Vec<Entry> {
         Entry::new("Playlists dir",        cfg.paths.playlists_dir.display()),
         Entry::new("yt-dlp path",          &cfg.paths.ytdlp_path),
         Entry::new("Soulseek username",    &cfg.soulseek.username),
+        Entry::secret("Soulseek password", &cfg.soulseek.password),
         Entry::new("Provider order",       cfg.provider.order.join(", ")),
         Entry::new("Fallback enabled",     cfg.provider.fallback_enabled),
         Entry::new("Preferred format",     &cfg.download.preferred_format),
@@ -71,6 +82,17 @@ fn build_entries(cfg: &Config) -> Vec<Entry> {
         Entry::new("Notifications",        cfg.notifications.enabled),
         Entry::new("DAP profile",          cfg.dap_profiles.first().map(|p| p.name.as_str()).unwrap_or("none")),
         Entry::ro("Quality warnings",      cfg.download.quality_warning),
+        Entry::new("Verbose logs",         cfg.verbose_logs),
+        Entry::new("Auto-save log",        cfg.auto_save_log),
+        // ── Actions ──────────────────────────────────────────────────────────
+        Entry::action(
+            "Download sldl",
+            if crate::sldl_setup::sldl_found() {
+                "✓ installed — Enter to re-download"
+            } else {
+                "not found — press Enter to auto-download"
+            },
+        ),
     ]
 }
 
@@ -106,8 +128,14 @@ pub fn handle_key(app: &mut App, state: &mut SettingsState, key: KeyEvent) -> bo
             if state.selected + 1 < state.entries.len() { state.selected += 1; }
         }
         KeyCode::Enter => {
-            if state.entries[state.selected].editable {
-                state.input_buf = state.entries[state.selected].value.clone();
+            let entry = &state.entries[state.selected];
+            if entry.is_action {
+                // Dispatch action entries
+                if entry.label == "Download sldl" {
+                    app.start_sldl_download();
+                }
+            } else if entry.editable {
+                state.input_buf = entry.value.clone();
                 state.edit_mode = true;
             }
         }
@@ -126,22 +154,25 @@ fn apply_edit(app: &mut App, state: &SettingsState) {
         0  => app.cfg.paths.music_root        = val.into(),
         1  => app.cfg.paths.playlists_dir     = val.into(),
         2  => app.cfg.paths.ytdlp_path        = val,
-        3  => app.cfg.soulseek.username        = val,
-        4  => {
+        3  => app.cfg.soulseek.username              = val,
+        4  => app.cfg.soulseek.password              = val,
+        5  => {
             app.cfg.provider.order = val.split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
         }
-        5  => app.cfg.provider.fallback_enabled   = parse_bool(&val),
-        6  => app.cfg.download.preferred_format   = val,
-        7  => app.cfg.download.concurrent_playlists = val.parse().unwrap_or(2),
-        8  => app.cfg.download.concurrent_tracks  = val.parse().unwrap_or(4),
-        9  => app.cfg.notifications.enabled       = parse_bool(&val),
-        10 => {
+        6  => app.cfg.provider.fallback_enabled      = parse_bool(&val),
+        7  => app.cfg.download.preferred_format      = val,
+        8  => app.cfg.download.concurrent_playlists  = val.parse().unwrap_or(2),
+        9  => app.cfg.download.concurrent_tracks     = val.parse().unwrap_or(4),
+        10 => app.cfg.notifications.enabled          = parse_bool(&val),
+        11 => {
             // Move chosen profile to front
             app.cfg.dap_profiles.sort_by_key(|p| if p.name == val { 0i32 } else { 1 });
         }
+        13 => app.cfg.verbose_logs  = parse_bool(&val),
+        14 => app.cfg.auto_save_log = parse_bool(&val),
         _  => {}
     }
 }
@@ -168,7 +199,14 @@ pub fn draw_settings(f: &mut Frame, _app: &App, state: &mut SettingsState) {
     let items: Vec<ListItem> = state.entries.iter().enumerate().map(|(i, e)| {
         let selected = i == state.selected;
         let val_text = if selected && state.edit_mode {
-            format!("{}_", state.input_buf)
+            // Password fields: show bullets while typing
+            if e.masked {
+                format!("{}_", "•".repeat(state.input_buf.len()))
+            } else {
+                format!("{}_", state.input_buf)
+            }
+        } else if e.masked && !e.value.is_empty() {
+            "•".repeat(e.value.len().min(24))
         } else {
             e.value.clone()
         };
@@ -177,7 +215,11 @@ pub fn draw_settings(f: &mut Frame, _app: &App, state: &mut SettingsState) {
             .fg(if selected { ACCENT } else { Color::White })
             .add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() });
 
-        let val_style = Style::default().fg(if state.edit_mode && selected { EDIT } else { DIM });
+        let val_style = if e.is_action {
+            Style::default().fg(if selected { ACCENT } else { DIM })
+        } else {
+            Style::default().fg(if state.edit_mode && selected { EDIT } else { DIM })
+        };
 
         ListItem::new(Line::from(vec![
             Span::styled(format!("{:<26}", e.label), label_style),

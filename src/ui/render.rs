@@ -3,10 +3,10 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
 };
 
-use super::{App, Screen};
+use super::{App, PlaylistStatus, Screen};
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -29,11 +29,16 @@ pub fn draw_main(f: &mut Frame, app: &App) {
     draw_playlist_panel(f, app, left);
     draw_log_panel(f, app, log_area);
     draw_gauge(f, app, gauge_area);
-    draw_hint_bar(f, hint_row, app.screen, app.running);
+    draw_hint_bar(f, hint_row, app.screen, app.running, app.filter_mode);
 
-    // Import input overlay — drawn on top of everything
+    // Import input overlay
     if app.screen == Screen::Import {
         draw_import_bar(f, area, app);
+    }
+
+    // Help popup (drawn last so it's on top of everything)
+    if app.show_help {
+        draw_help_popup(f, area);
     }
 }
 
@@ -45,31 +50,75 @@ fn draw_playlist_panel(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let title = if app.running {
-        match app.screen {
-            Screen::Working => " Downloading… ",
-            _               => " Playlists ",
-        }
+    // Title changes when filter mode is active
+    let title_str = if app.filter_mode {
+        format!(" / {}█ ", app.playlist_filter)
+    } else if app.running && app.screen == Screen::Working {
+        " Downloading… ".to_string()
     } else {
-        " Playlists "
+        " Playlists ".to_string()
     };
 
+    let border_col = if app.filter_mode { WARN } else { ACCENT };
+
     let block = Block::default()
-        .title(title)
+        .title(title_str)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT));
+        .border_style(Style::default().fg(border_col));
 
-    let items: Vec<ListItem> = app.playlist_names.iter().enumerate().map(|(i, name)| {
-        let style = if i == app.playlist_sel {
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+    // Compute the filtered list of names to display
+    let vis_names: Vec<&str> = {
+        if app.playlist_filter.is_empty() {
+            app.playlist_names.iter().map(|s| s.as_str()).collect()
         } else {
-            Style::default().fg(Color::White)
-        };
-        ListItem::new(name.as_str()).style(style)
-    }).collect();
+            let f = app.playlist_filter.to_lowercase();
+            app.playlist_names.iter()
+                .filter(|n| n.to_lowercase().contains(&f))
+                .map(|s| s.as_str())
+                .collect()
+        }
+    };
 
-    let list = List::new(items).block(block).highlight_symbol("▶ ");
+    let total   = vis_names.len();
+    let visible = area.height.saturating_sub(2) as usize;
+    let sel     = app.playlist_sel;
+    let start   = sel
+        .saturating_sub(visible.saturating_sub(1))
+        .min(total.saturating_sub(visible));
+
+    let items: Vec<ListItem> = vis_names
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(i, name)| {
+            let is_sel  = i == sel;
+            let is_dl   = app.downloading_name.as_deref() == Some(name);
+            let prefix  = if is_dl { "⬇ " } else if is_sel { "▶ " } else { "  " };
+
+            // Colour by disk status; selection overrides to ACCENT
+            let color = if is_sel {
+                ACCENT
+            } else {
+                match app.playlist_statuses.get(*name) {
+                    Some(PlaylistStatus::HasFiles) => OK,
+                    Some(PlaylistStatus::Empty)    => WARN,
+                    _                              => Color::White,
+                }
+            };
+            let modifier = if is_sel || is_dl {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            };
+
+            ListItem::new(format!("{}{}", prefix, name))
+                .style(Style::default().fg(color).add_modifier(modifier))
+        })
+        .collect();
+
+    let list = List::new(items).block(block);
     f.render_widget(list, area);
 }
 
@@ -134,32 +183,58 @@ fn draw_home_menu(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Log panel ─────────────────────────────────────────────────────────────────
 
+const VINYL: [&str; 8] = ["♩ ", "♩♪", "♪♫", "♫♬", "♬♩", "♩♫", "♪♬", "♫♩"];
+
 fn draw_log_panel(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
-        .title(" Log ")
+        .title(Line::from(vec![
+            Span::styled(" ♫ ", Style::default().fg(ACCENT)),
+            Span::styled("Log", Style::default().fg(DIM)),
+            Span::styled(" ♫ ", Style::default().fg(ACCENT)),
+        ]))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(DIM));
 
-    let inner_h = area.height.saturating_sub(2) as usize;
-    let total   = app.logs.len();
-    let start   = if total > inner_h {
-        app.log_scroll.min(total - inner_h)
+    // Reserve the first row for a permanent ASCII header; logs use the rest.
+    let inner_h  = area.height.saturating_sub(2) as usize;
+    let log_rows = inner_h.saturating_sub(1);
+    let total    = app.logs.len();
+    let start    = if total > log_rows {
+        app.log_scroll.min(total - log_rows)
     } else {
         0
     };
 
-    let lines: Vec<Line> = app.logs
+    // Static header line — optionally shows a vinyl animation while downloading
+    let mut header_spans = vec![
+        Span::styled(" ♩ ♪ ", Style::default().fg(ACCENT)),
+        Span::styled(
+            "spotify-to-offline",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ♫ ♬ ", Style::default().fg(ACCENT)),
+    ];
+    if app.running {
+        let frame = VINYL[app.anim_frame as usize % VINYL.len()];
+        header_spans.push(Span::styled(
+            format!("  ─  {} ", frame),
+            Style::default().fg(ACCENT),
+        ));
+    }
+    let header = Line::from(header_spans);
+
+    let mut lines: Vec<Line> = vec![header];
+    lines.extend(app.logs
         .iter()
         .skip(start)
-        .take(inner_h)
+        .take(log_rows)
         .map(|entry| Line::from(vec![
             Span::styled(format!("[{}] ", entry.ts), Style::default().fg(DIM)),
             Span::styled(entry.text.clone(), log_style(&entry.text)),
-        ]))
-        .collect();
+        ])));
 
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    f.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
 fn log_style(text: &str) -> Style {
@@ -257,19 +332,74 @@ fn draw_import_bar(f: &mut Frame, area: Rect, app: &App) {
 
 // ── Hint bar ──────────────────────────────────────────────────────────────────
 
-fn draw_hint_bar(f: &mut Frame, area: Rect, screen: Screen, running: bool) {
-    let hints = match screen {
-        Screen::Import => " Enter confirm   Esc cancel",
-        Screen::Working if running =>
-            " ↑↓ scroll log   PgUp/Dn page   q quit",
-        _ =>
-            " ↑↓ navigate   Enter download   a all   i import   m m3u   s settings   q quit",
+fn draw_hint_bar(f: &mut Frame, area: Rect, screen: Screen, running: bool, filter_mode: bool) {
+    let hints = if filter_mode {
+        " type to filter   ↑↓ navigate   Enter download   Esc cancel"
+    } else {
+        match screen {
+            Screen::Import => " Enter confirm   Esc cancel",
+            Screen::Working if running =>
+                " ↑↓ scroll log   PgUp/Dn page   q quit",
+            _ =>
+                " ↑↓ nav   Enter dl   a all   / filter   ? help   i import   m m3u   s settings   q quit",
+        }
     };
 
     f.render_widget(
         Paragraph::new(hints).style(Style::default().fg(DIM)),
         area,
     );
+}
+
+// ── Help popup ────────────────────────────────────────────────────────────────
+
+fn draw_help_popup(f: &mut Frame, area: Rect) {
+    let popup_w = 50u16;
+    let popup_h = 17u16;
+    let x = area.width.saturating_sub(popup_w) / 2;
+    let y = area.height.saturating_sub(popup_h) / 2;
+    let popup = Rect {
+        x:      x.max(1),
+        y:      y.max(1),
+        width:  popup_w.min(area.width.saturating_sub(2)),
+        height: popup_h.min(area.height.saturating_sub(2)),
+    };
+
+    f.render_widget(Clear, popup);
+
+    let key = |k: &'static str| Span::styled(
+        format!("  {:<10}", k),
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    );
+    let desc = |d: &'static str| Span::raw(d);
+
+    let lines = vec![
+        Line::from(""),
+        Line::from(vec![key("↑↓ / jk"),    desc("navigate playlists")]),
+        Line::from(vec![key("Enter"),       desc("download selected")]),
+        Line::from(vec![key("a"),           desc("download all playlists")]),
+        Line::from(vec![key("/"),           desc("filter playlists")]),
+        Line::from(vec![key("i"),           desc("import Exportify ZIP")]),
+        Line::from(vec![key("m"),           desc("generate M3U files")]),
+        Line::from(vec![key("s"),           desc("settings")]),
+        Line::from(vec![key("l"),           desc("save log to file")]),
+        Line::from(vec![key("PgUp / PgDn"), desc("scroll log")]),
+        Line::from(vec![key("?"),           desc("toggle this help")]),
+        Line::from(vec![key("q / Ctrl+C"),  desc("quit")]),
+        Line::from(""),
+        Line::from(
+            Span::styled("  any key to dismiss", Style::default().fg(DIM))
+        ),
+    ];
+
+    let block = Block::default()
+        .title(" ── Keyboard Shortcuts ── ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT));
+
+    f.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 // ── Layout helpers ────────────────────────────────────────────────────────────
