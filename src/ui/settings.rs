@@ -19,6 +19,8 @@ const EDIT:   Color = Color::Yellow;
 // ── Setting entry ─────────────────────────────────────────────────────────────
 
 struct Entry {
+    /// Stable identifier used by apply_edit — order in the list doesn't matter.
+    key:       &'static str,
     label:     &'static str,
     value:     String,
     editable:  bool,
@@ -29,17 +31,14 @@ struct Entry {
 }
 
 impl Entry {
-    fn new(label: &'static str, value: impl ToString) -> Self {
-        Entry { label, value: value.to_string(), editable: true,  is_action: false, masked: false }
+    fn new(key: &'static str, label: &'static str, value: impl ToString) -> Self {
+        Entry { key, label, value: value.to_string(), editable: true,  is_action: false, masked: false }
     }
-    fn ro(label: &'static str, value: impl ToString) -> Self {
-        Entry { label, value: value.to_string(), editable: false, is_action: false, masked: false }
+    fn action(key: &'static str, label: &'static str, value: impl ToString) -> Self {
+        Entry { key, label, value: value.to_string(), editable: false, is_action: true,  masked: false }
     }
-    fn action(label: &'static str, value: impl ToString) -> Self {
-        Entry { label, value: value.to_string(), editable: false, is_action: true,  masked: false }
-    }
-    fn secret(label: &'static str, value: impl ToString) -> Self {
-        Entry { label, value: value.to_string(), editable: true,  is_action: false, masked: true  }
+    fn secret(key: &'static str, label: &'static str, value: impl ToString) -> Self {
+        Entry { key, label, value: value.to_string(), editable: true,  is_action: false, masked: true  }
     }
 }
 
@@ -69,23 +68,25 @@ impl SettingsState {
 
 fn build_entries(cfg: &Config) -> Vec<Entry> {
     vec![
-        Entry::new("Music root",          cfg.paths.music_root.display()),
-        Entry::new("Playlists dir",        cfg.paths.playlists_dir.display()),
-        Entry::new("yt-dlp path",          &cfg.paths.ytdlp_path),
-        Entry::new("Soulseek username",    &cfg.soulseek.username),
-        Entry::secret("Soulseek password", &cfg.soulseek.password),
-        Entry::new("Provider order",       cfg.provider.order.join(", ")),
-        Entry::new("Fallback enabled",     cfg.provider.fallback_enabled),
-        Entry::new("Preferred format",     &cfg.download.preferred_format),
-        Entry::new("Concurrent playlists", cfg.download.concurrent_playlists),
-        Entry::new("Concurrent tracks",    cfg.download.concurrent_tracks),
-        Entry::new("Notifications",        cfg.notifications.enabled),
-        Entry::new("DAP profile",          cfg.dap_profiles.first().map(|p| p.name.as_str()).unwrap_or("none")),
-        Entry::ro("Quality warnings",      cfg.download.quality_warning),
-        Entry::new("Verbose logs",         cfg.verbose_logs),
-        Entry::new("Auto-save log",        cfg.auto_save_log),
+        Entry::new("music_root",     "Music root",           cfg.paths.music_root.display()),
+        Entry::new("playlists_dir",  "Playlists dir",        cfg.paths.playlists_dir.display()),
+        Entry::new("ytdlp_path",     "yt-dlp path",          &cfg.paths.ytdlp_path),
+        Entry::new("slsk_user",      "Soulseek username",    &cfg.soulseek.username),
+        Entry::secret("slsk_pass",   "Soulseek password",    &cfg.soulseek.password),
+        Entry::new("provider_order", "Provider order",       cfg.provider.order.join(", ")),
+        Entry::new("fallback",       "Fallback enabled",     cfg.provider.fallback_enabled),
+        Entry::new("pref_format",    "Preferred format",     &cfg.download.preferred_format),
+        Entry::new("name_format",    "File name format",     &cfg.download.name_format),
+        Entry::new("conc_playlists", "Concurrent playlists", cfg.download.concurrent_playlists),
+        Entry::new("conc_tracks",    "Concurrent tracks",    cfg.download.concurrent_tracks),
+        Entry::new("notifications",  "Notifications",        cfg.notifications.enabled),
+        Entry::new("dap_profile",    "DAP profile",          cfg.dap_profiles.first().map(|p| p.name.as_str()).unwrap_or("none")),
+        Entry::new("quality_warn",   "Quality warnings",     cfg.download.quality_warning),
+        Entry::new("verbose_logs",   "Verbose logs",         cfg.verbose_logs),
+        Entry::new("auto_save_log",  "Auto-save log",        cfg.auto_save_log),
         // ── Actions ──────────────────────────────────────────────────────────
         Entry::action(
+            "dl_sldl",
             "Download sldl",
             if crate::sldl_setup::sldl_found() {
                 "✓ installed — Enter to re-download"
@@ -131,7 +132,7 @@ pub fn handle_key(app: &mut App, state: &mut SettingsState, key: KeyEvent) -> bo
             let entry = &state.entries[state.selected];
             if entry.is_action {
                 // Dispatch action entries
-                if entry.label == "Download sldl" {
+                if entry.key == "dl_sldl" {
                     app.start_sldl_download();
                 }
             } else if entry.editable {
@@ -140,7 +141,11 @@ pub fn handle_key(app: &mut App, state: &mut SettingsState, key: KeyEvent) -> bo
             }
         }
         KeyCode::Esc | KeyCode::Char('s') => {
-            app.screen = super::Screen::Home;
+            app.screen = app.settings_return;
+            if app.running {
+                // Settings were edited mid-run; the active download keeps its
+                // old config — changes apply from the next run.
+            }
             return true;
         }
         _ => {}
@@ -150,30 +155,38 @@ pub fn handle_key(app: &mut App, state: &mut SettingsState, key: KeyEvent) -> bo
 
 fn apply_edit(app: &mut App, state: &SettingsState) {
     let val = state.input_buf.trim().to_string();
-    match state.selected {
-        0  => app.cfg.paths.music_root        = val.into(),
-        1  => app.cfg.paths.playlists_dir     = val.into(),
-        2  => app.cfg.paths.ytdlp_path        = val,
-        3  => app.cfg.soulseek.username              = val,
-        4  => app.cfg.soulseek.password              = val,
-        5  => {
+    match state.entries[state.selected].key {
+        "music_root"     => app.cfg.paths.music_root    = val.into(),
+        "playlists_dir"  => app.cfg.paths.playlists_dir = val.into(),
+        "ytdlp_path"     => app.cfg.paths.ytdlp_path    = val,
+        "slsk_user"      => app.cfg.soulseek.username   = val,
+        "slsk_pass"      => app.cfg.soulseek.password   = val,
+        "provider_order" => {
             app.cfg.provider.order = val.split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
         }
-        6  => app.cfg.provider.fallback_enabled      = parse_bool(&val),
-        7  => app.cfg.download.preferred_format      = val,
-        8  => app.cfg.download.concurrent_playlists  = val.parse().unwrap_or(2),
-        9  => app.cfg.download.concurrent_tracks     = val.parse().unwrap_or(4),
-        10 => app.cfg.notifications.enabled          = parse_bool(&val),
-        11 => {
+        "fallback"       => app.cfg.provider.fallback_enabled     = parse_bool(&val),
+        "pref_format"    => app.cfg.download.preferred_format     = val,
+        "name_format"    => {
+            app.cfg.download.name_format = if val.is_empty() {
+                crate::config::default_name_format()
+            } else {
+                val
+            };
+        }
+        "conc_playlists" => app.cfg.download.concurrent_playlists = val.parse().unwrap_or(2),
+        "conc_tracks"    => app.cfg.download.concurrent_tracks    = val.parse().unwrap_or(4),
+        "notifications"  => app.cfg.notifications.enabled         = parse_bool(&val),
+        "dap_profile"    => {
             // Move chosen profile to front
             app.cfg.dap_profiles.sort_by_key(|p| if p.name == val { 0i32 } else { 1 });
         }
-        13 => app.cfg.verbose_logs  = parse_bool(&val),
-        14 => app.cfg.auto_save_log = parse_bool(&val),
-        _  => {}
+        "quality_warn"   => app.cfg.download.quality_warning = parse_bool(&val),
+        "verbose_logs"   => app.cfg.verbose_logs             = parse_bool(&val),
+        "auto_save_log"  => app.cfg.auto_save_log            = parse_bool(&val),
+        _ => {}
     }
 }
 
@@ -183,7 +196,7 @@ fn parse_bool(s: &str) -> bool {
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
-pub fn draw_settings(f: &mut Frame, _app: &App, state: &mut SettingsState) {
+pub fn draw_settings(f: &mut Frame, app: &App, state: &mut SettingsState) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -191,8 +204,13 @@ pub fn draw_settings(f: &mut Frame, _app: &App, state: &mut SettingsState) {
         .split(area);
 
     // List of settings
+    let title = if app.running {
+        "Settings — download running; changes apply to the NEXT run"
+    } else {
+        "Settings  (↑↓ navigate · Enter edit · Esc/s save & close)"
+    };
     let block = Block::default()
-        .title("Settings  (↑↓ navigate · Enter edit · Esc/s save & close)")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT));
 
@@ -234,7 +252,7 @@ pub fn draw_settings(f: &mut Frame, _app: &App, state: &mut SettingsState) {
     let hint_text = if state.edit_mode {
         "  Editing — Enter to confirm · Esc to cancel"
     } else {
-        "  Enter to edit · Esc or [s] to save & return to menu"
+        "  Enter to edit · Esc or [s] to save & return"
     };
     let hint = Paragraph::new(hint_text)
         .style(Style::default().fg(DIM))

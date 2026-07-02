@@ -12,10 +12,32 @@ use crate::import::TrackRow;
 pub enum TrackOutcome {
     /// Downloaded successfully
     Ok { path: String, format: String },
+    /// Already on disk (skip-existing / skip-music-dir hit). Path when known.
+    Skipped { path: Option<String>, format: Option<String> },
     /// Track not found on this provider (try next)
     NotFound,
     /// Provider error (don't retry other providers for this)
     Failed { reason: String },
+}
+
+// ── Provider events ───────────────────────────────────────────────────────────
+
+/// Streamed from providers to the orchestrator while a playlist runs.
+#[derive(Debug, Clone)]
+pub enum ProviderEvent {
+    /// Human-readable log line for the TUI panel.
+    Log(String),
+    /// Emitted once at run start: how many tracks exist / are pending.
+    TrackList { total: usize, existing: usize },
+    /// A track reached a terminal state.
+    TrackFinished { outcome: TerminalKind },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalKind {
+    Succeeded,
+    Skipped,
+    Failed,
 }
 
 // ── Provider trait ────────────────────────────────────────────────────────────
@@ -34,14 +56,14 @@ pub trait Provider: Send + Sync {
         output_dir: &std::path::Path,
     ) -> Result<TrackOutcome>;
 
-    /// Download an entire playlist (CSV) at once.
-    /// Default: serial loop over download_track. Soulseek overrides this
-    /// to run the whole CSV through sockseek in one subprocess call.
+    /// Download an entire playlist (CSV) at once. `cancel` flips to true when
+    /// the user aborts — implementations should kill their subprocess and bail.
     async fn download_playlist(
         &self,
         csv_path:   &std::path::Path,
         output_dir: &std::path::Path,
-        log_tx:     &tokio::sync::mpsc::UnboundedSender<String>,
+        ev_tx:      &tokio::sync::mpsc::UnboundedSender<ProviderEvent>,
+        cancel:     tokio::sync::watch::Receiver<bool>,
     ) -> Result<Vec<(TrackRow, TrackOutcome)>>;
 }
 

@@ -52,6 +52,8 @@ fn migrate(conn: &Connection) -> Result<()> {
 #[derive(Debug, Clone)]
 pub enum Status {
     Ok,
+    /// Already on disk — reused instead of re-downloaded.
+    Skipped,
     NotFound,
     Failed,
     QualityWarn { wanted: String, got: String },
@@ -61,6 +63,7 @@ impl std::fmt::Display for Status {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Ok                     => write!(f, "ok"),
+            Self::Skipped                => write!(f, "skipped"),
             Self::NotFound               => write!(f, "not_found"),
             Self::Failed                 => write!(f, "failed"),
             Self::QualityWarn { wanted, got } => write!(f, "quality_warn:{}>{}", wanted, got),
@@ -102,6 +105,7 @@ pub fn insert(conn: &Connection, r: &Record<'_>) -> Result<()> {
 pub struct Stats {
     pub total:         usize,
     pub ok:            usize,
+    pub skipped:       usize,
     pub not_found:     usize,
     pub failed:        usize,
     pub quality_warns: usize,
@@ -121,6 +125,7 @@ pub fn stats_since(conn: &Connection, since: &DateTime<Utc>) -> Result<Stats> {
     for row in &rows {
         match row.as_str() {
             "ok"        => s.ok        += 1,
+            "skipped"   => s.skipped   += 1,
             "not_found" => s.not_found += 1,
             "failed"    => s.failed    += 1,
             r if r.starts_with("quality_warn") => s.quality_warns += 1,
@@ -128,6 +133,15 @@ pub fn stats_since(conn: &Connection, since: &DateTime<Utc>) -> Result<Stats> {
         }
     }
     Ok(s)
+}
+
+/// Remove all download history for a playlist. Returns rows deleted.
+pub fn delete_playlist(conn: &Connection, playlist: &str) -> Result<usize> {
+    let n = conn.execute(
+        "DELETE FROM downloads WHERE playlist = ?1",
+        params![playlist],
+    )?;
+    Ok(n)
 }
 
 /// Returns lines for the quality-warning section of the completion report.

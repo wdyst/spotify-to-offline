@@ -11,7 +11,7 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::config::{save, Config};
 use crate::download::{run_all, Event as DownloadEvent};
@@ -33,15 +33,18 @@ impl LogLine {
 
 // ── Playlist status ───────────────────────────────────────────────────────────
 
-/// Scanned from music_root on startup and after each download.
+/// Derived from sockseek's `_index.csv` per playlist (audio itself lives in
+/// Artist/Album folders, so the playlist folder only holds the index).
 #[derive(Clone, Copy, PartialEq)]
 pub enum PlaylistStatus {
-    /// Directory not found on disk.
+    /// Never downloaded — no index on disk.
     Unknown,
-    /// Directory exists but contains no recognised audio files.
+    /// Index exists but no tracks are on disk (download failed or was aborted).
     Empty,
-    /// Directory contains at least one audio file.
-    HasFiles,
+    /// Some tracks on disk.
+    Partial,
+    /// Every track in the playlist is on disk.
+    Complete,
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -56,6 +59,17 @@ pub enum Screen {
     Import,
     /// Settings editor
     Settings,
+}
+
+// ── Live download progress (per playlist) ─────────────────────────────────────
+
+#[derive(Clone, Copy, Default)]
+pub struct DlProgress {
+    pub done:    usize,
+    pub total:   usize,
+    pub ok:      usize,
+    pub failed:  usize,
+    pub skipped: usize,
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -86,11 +100,24 @@ pub struct App {
     // ── Help overlay ──────────────────────────────────────────────────────────
     pub show_help:         bool,
 
-    // ── Per-playlist status (scanned from music_root) ─────────────────────────
+    // ── Delete confirmation popup ─────────────────────────────────────────────
+    pub confirm_delete:    Option<String>,
+
+    // ── Per-playlist status + on-disk counts (done, total) ────────────────────
     pub playlist_statuses: HashMap<String, PlaylistStatus>,
+    pub playlist_counts:   HashMap<String, (usize, usize)>,
+
+    // ── Live progress of the current run ──────────────────────────────────────
+    pub dl_progress:       HashMap<String, DlProgress>,
 
     // ── Name of playlist being downloaded right now ───────────────────────────
     pub downloading_name:  Option<String>,
+
+    /// Which screen to return to when leaving Settings.
+    pub settings_return:   Screen,
+
+    /// Flip to true to abort the current run.
+    cancel_tx: Option<watch::Sender<bool>>,
 
     rt_handle: tokio::runtime::Handle,
     ev_rx:     Option<mpsc::UnboundedReceiver<DownloadEvent>>,
@@ -98,8 +125,9 @@ pub struct App {
 
 impl App {
     fn new(cfg: Config, rt: tokio::runtime::Handle) -> Self {
-        let playlist_names    = gather_playlist_names();
-        let playlist_statuses = scan_statuses(&cfg.paths.music_root, &playlist_names);
+        let playlist_names = gather_playlist_names();
+        let (playlist_statuses, playlist_counts) =
+            scan_statuses(&cfg.paths.music_root, &playlist_names);
         App {
             cfg,
             screen:           Screen::Home,
@@ -117,8 +145,13 @@ impl App {
             playlist_filter:  String::new(),
             filter_mode:      false,
             show_help:        false,
+            confirm_delete:   None,
             playlist_statuses,
+            playlist_counts,
+            dl_progress:      HashMap::new(),
             downloading_name: None,
+            settings_return:  Screen::Home,
+            cancel_tx:        None,
             rt_handle:        rt,
             ev_rx:            None,
         }
@@ -134,16 +167,19 @@ impl App {
 
     fn refresh_playlists(&mut self) {
         self.playlist_names = gather_playlist_names();
-        if self.playlist_sel >= self.playlist_names.len() {
-            self.playlist_sel = 0;
+        let vis = self.visible_playlist_names().len();
+        if self.playlist_sel >= vis {
+            self.playlist_sel = vis.saturating_sub(1);
         }
         self.rescan_statuses();
     }
 
     fn rescan_statuses(&mut self) {
-        self.playlist_statuses = scan_statuses(
+        let (st, counts) = scan_statuses(
             &self.cfg.paths.music_root, &self.playlist_names,
         );
+        self.playlist_statuses = st;
+        self.playlist_counts   = counts;
     }
 
     /// Returns only the playlist names that match the current filter (or all if no filter).
@@ -157,6 +193,13 @@ impl App {
                 .map(|s| s.as_str())
                 .collect()
         }
+    }
+
+    /// Name currently under the cursor (respecting the filter).
+    pub fn selected_playlist(&self) -> Option<String> {
+        self.visible_playlist_names()
+            .get(self.playlist_sel)
+            .map(|s| s.to_string())
     }
 
     // ── Event draining ────────────────────────────────────────────────────────
@@ -184,7 +227,26 @@ impl App {
                 self.push_log(format!("[{}/{}] ▶ {}", index, total, name));
                 self.progress_label   = name.clone();
                 self.downloading_name = Some(name);
-                self.progress_pct     = ((index - 1) as u16 * 100) / (total as u16).max(1);
+            }
+
+            DownloadEvent::PlaylistProgress { name, done, total, ok, failed, skipped } => {
+                self.dl_progress.insert(name.clone(), DlProgress {
+                    done, total, ok, failed, skipped,
+                });
+                self.downloading_name = Some(name.clone());
+
+                // Aggregate across all playlists in this run
+                let (mut sd, mut st) = (0usize, 0usize);
+                let (mut sok, mut sfail, mut sskip) = (0usize, 0usize, 0usize);
+                for p in self.dl_progress.values() {
+                    sd += p.done; st += p.total;
+                    sok += p.ok; sfail += p.failed; sskip += p.skipped;
+                }
+                self.progress_pct   = if st > 0 { ((sd * 100) / st) as u16 } else { 0 };
+                self.progress_label = format!(
+                    "{} {}/{}   ✓ {}  ⏭ {}  ✗ {}",
+                    name, done, total, sok, sskip, sfail,
+                );
             }
 
             DownloadEvent::TrackDone { artist, title, status } => {
@@ -197,22 +259,23 @@ impl App {
 
             DownloadEvent::AllDone { stats } => {
                 self.push_log(format!(
-                    "━━ Done — {} found  {} not found  {} failed  {} quality warns",
-                    stats.ok, stats.not_found, stats.failed, stats.quality_warns,
+                    "━━ Done — {} downloaded  {} reused  {} not found  {} failed  {} quality warns",
+                    stats.ok, stats.skipped, stats.not_found, stats.failed, stats.quality_warns,
                 ));
                 self.progress_label   = format!(
-                    "Done  ✓ {}  ✗ {}  ⚡ {}",
-                    stats.ok, stats.not_found, stats.failed,
+                    "Done  ✓ {}  ⏭ {}  ✗ {}",
+                    stats.ok, stats.skipped, stats.not_found + stats.failed,
                 );
                 self.downloading_name = None;
                 self.running          = false;
+                self.cancel_tx        = None;
                 self.progress_pct     = 100;
                 self.screen           = Screen::Home;
                 self.rescan_statuses();
                 if self.cfg.notifications.enabled && self.cfg.notifications.on_completion {
                     crate::notify::send(
                         "spotify-to-offline",
-                        &format!("Done — {}/{} tracks found", stats.ok, stats.total),
+                        &format!("Done — {}/{} tracks found", stats.ok + stats.skipped, stats.total),
                     );
                 }
             }
@@ -255,17 +318,45 @@ impl App {
     fn start_download(&mut self, only: Option<String>) {
         if self.running { return; }
         let (tx, rx) = mpsc::unbounded_channel::<DownloadEvent>();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
         self.ev_rx      = Some(rx);
+        self.cancel_tx  = Some(cancel_tx);
         self.running    = true;
         self.progress_pct   = 0;
         self.progress_label = "Starting…".into();
+        self.dl_progress.clear();
         self.push_log("⬇ Download started");
         self.screen = Screen::Working;
 
         let cfg = self.cfg.clone();
         self.rt_handle.spawn(async move {
-            let _ = run_all(&cfg, only.as_deref(), Some(tx)).await;
+            let _ = run_all(&cfg, only.as_deref(), Some(tx), cancel_rx).await;
         });
+    }
+
+    fn cancel_download(&mut self) {
+        if !self.running { return; }
+        if let Some(tx) = &self.cancel_tx {
+            let _ = tx.send(true);
+            self.push_log("✖ Cancel requested — stopping downloads…");
+        }
+    }
+
+    fn delete_playlist(&mut self, name: &str) {
+        match crate::import::remove_playlist(&self.cfg, name) {
+            Ok(removed) => {
+                for p in &removed {
+                    self.push_log(format!("  🗑 removed {}", p));
+                }
+                match crate::db::open().and_then(|c| crate::db::delete_playlist(&c, name)) {
+                    Ok(n) if n > 0 => self.push_log(format!("  🗑 {} history rows cleared", n)),
+                    _ => {}
+                }
+                self.push_log(format!("  ✓ Playlist '{}' removed (audio files kept)", name));
+            }
+            Err(e) => self.push_log(format!("  ✗ Remove failed: {}", e)),
+        }
+        self.refresh_playlists();
     }
 
     fn start_import(&mut self, path: Option<String>) {
@@ -448,11 +539,22 @@ fn run_tui_blocking(cfg: Config, rt: tokio::runtime::Handle) -> Result<()> {
                 }
                 // Only handle key-press events; ignore release/repeat to avoid doubled input
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    // Global quit (not while typing in import or settings)
+                    // Delete confirmation popup consumes every key
+                    if let Some(name) = app.confirm_delete.take() {
+                        if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                            app.delete_playlist(&name);
+                        } else {
+                            app.push_log("  · delete cancelled");
+                        }
+                        continue;
+                    }
+
+                    // Global quit (not while typing in import, settings, or filter)
                     if key.code == KeyCode::Char('q')
                         && key.modifiers.is_empty()
                         && app.screen != Screen::Settings
                         && app.screen != Screen::Import
+                        && !app.filter_mode
                     {
                         break;
                     }
@@ -462,14 +564,9 @@ fn run_tui_blocking(cfg: Config, rt: tokio::runtime::Handle) -> Result<()> {
                         break;
                     }
 
-                    // Help overlay: any key dismisses it ('?' also re-toggles via
-                    // handle_main_key below, so here we just close it on other keys)
+                    // Help overlay: any key dismisses it
                     if app.show_help {
                         app.show_help = false;
-                        if key.code != KeyCode::Char('?') {
-                            continue; // key consumed to dismiss help
-                        }
-                        // '?' while help is open = close it (don't fall through to re-open)
                         continue;
                     }
 
@@ -527,10 +624,11 @@ fn run_tui_blocking(cfg: Config, rt: tokio::runtime::Handle) -> Result<()> {
 fn handle_main_key(app: &mut App, key: crossterm::event::KeyEvent) {
     use KeyCode::*;
 
-    // ── Filter mode: char keys feed the filter, arrows navigate, Esc exits ──
+    // ── Filter typing mode: chars feed the filter, arrows navigate ──────────
     if app.filter_mode {
         match key.code {
             Esc => {
+                // Discard the filter entirely
                 app.filter_mode = false;
                 app.playlist_filter.clear();
                 app.playlist_sel = 0;
@@ -548,14 +646,10 @@ fn handle_main_key(app: &mut App, key: crossterm::event::KeyEvent) {
                 if app.playlist_sel + 1 < len { app.playlist_sel += 1; }
             }
             Enter => {
-                if app.running { return; }
-                let only: Option<String> = {
-                    let vis = app.visible_playlist_names();
-                    vis.get(app.playlist_sel).map(|s| s.to_string())
-                };
+                // Accept the filter and return to normal navigation.
+                // (Enter again on a selection starts the download.)
                 app.filter_mode = false;
-                app.playlist_filter.clear();
-                app.start_download(only);
+                if app.playlist_filter.is_empty() { app.playlist_sel = 0; }
             }
             Char(c) => {
                 app.playlist_filter.push(c);
@@ -572,9 +666,8 @@ fn handle_main_key(app: &mut App, key: crossterm::event::KeyEvent) {
             if app.playlist_sel > 0 { app.playlist_sel -= 1; }
         }
         Down | Char('j') => {
-            if app.playlist_sel + 1 < app.playlist_names.len() {
-                app.playlist_sel += 1;
-            }
+            let len = app.visible_playlist_names().len();
+            if app.playlist_sel + 1 < len { app.playlist_sel += 1; }
         }
         Enter => {
             if app.running { return; }
@@ -582,11 +675,21 @@ fn handle_main_key(app: &mut App, key: crossterm::event::KeyEvent) {
                 app.screen = Screen::Import;
                 return;
             }
-            let only = app.playlist_names.get(app.playlist_sel).cloned();
-            app.start_download(only);
+            let only = app.selected_playlist();
+            if only.is_some() { app.start_download(only); }
         }
         Char('a') => {
             if !app.running { app.start_download(None); }
+        }
+        Char('d') | Delete => {
+            if !app.running {
+                if let Some(name) = app.selected_playlist() {
+                    app.confirm_delete = Some(name);
+                }
+            }
+        }
+        Char('x') => {
+            app.cancel_download();
         }
         Char('i') => {
             if !app.running {
@@ -598,7 +701,12 @@ fn handle_main_key(app: &mut App, key: crossterm::event::KeyEvent) {
             if !app.running { app.start_m3u(); }
         }
         Char('s') => {
+            app.settings_return = app.screen;
             app.screen = Screen::Settings;
+        }
+        Char('r') => {
+            app.rescan_statuses();
+            app.push_log("  · statuses rescanned");
         }
         Char('/') => {
             // Enter filter mode
@@ -620,7 +728,11 @@ fn handle_main_key(app: &mut App, key: crossterm::event::KeyEvent) {
             app.log_scroll = (app.log_scroll + 10).min(max);
         }
         Esc => {
-            if app.screen == Screen::Working && !app.running {
+            if !app.playlist_filter.is_empty() {
+                // Clear an applied filter
+                app.playlist_filter.clear();
+                app.playlist_sel = 0;
+            } else if app.screen == Screen::Working && !app.running {
                 app.screen = Screen::Home;
             }
         }
@@ -673,36 +785,48 @@ fn is_log_noise(s: &str) -> bool {
         || body.starts_with("--- End of inner exception")
 }
 
-/// Scan `music_root` to determine which playlists already have audio on disk.
+/// Determine playlist download state from sockseek's `_index.csv` files.
+/// Returns (status map, (on_disk, total) count map).
 fn scan_statuses(
     music_root: &std::path::Path,
     names: &[String],
-) -> HashMap<String, PlaylistStatus> {
-    let mut map = HashMap::new();
+) -> (HashMap<String, PlaylistStatus>, HashMap<String, (usize, usize)>) {
+    let mut statuses = HashMap::new();
+    let mut counts   = HashMap::new();
+
     for name in names {
-        let dir = music_root.join(name);
-        let status = if !dir.exists() {
+        let tracks = crate::import::load_playlist(
+            &crate::config::work_dir().join(format!("{}.csv", name)),
+        ).unwrap_or_default();
+        let total = tracks.len();
+
+        let index_path = music_root.join(name).join("_index.csv");
+        let index      = crate::providers::soulseek::parse_index(&index_path);
+
+        let done = tracks.iter()
+            .filter(|t| {
+                index.get(&t.title.to_lowercase())
+                    .map(|p| p.exists())
+                    .unwrap_or(false)
+            })
+            .count();
+
+        let status = if total == 0 {
             PlaylistStatus::Unknown
+        } else if done >= total {
+            PlaylistStatus::Complete
+        } else if done > 0 {
+            PlaylistStatus::Partial
+        } else if index_path.exists() {
+            PlaylistStatus::Empty
         } else {
-            let has_audio = std::fs::read_dir(&dir)
-                .map(|rd| rd.filter_map(|e| e.ok()).any(|e| {
-                    let n = e.file_name();
-                    let ext = std::path::Path::new(&n)
-                        .extension()
-                        .and_then(|x| x.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    matches!(
-                        ext.as_str(),
-                        "mp3" | "flac" | "ogg" | "m4a" | "wav" | "opus" | "aac"
-                    )
-                }))
-                .unwrap_or(false);
-            if has_audio { PlaylistStatus::HasFiles } else { PlaylistStatus::Empty }
+            PlaylistStatus::Unknown
         };
-        map.insert(name.clone(), status);
+
+        statuses.insert(name.clone(), status);
+        counts.insert(name.clone(), (done, total));
     }
-    map
+    (statuses, counts)
 }
 
 /// Write the current log buffer to `music_root/s2o_log_<timestamp>.txt`.

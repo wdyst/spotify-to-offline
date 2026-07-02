@@ -77,10 +77,18 @@ pub struct DownloadConfig {
     pub concurrent_tracks:    usize,
     /// "flac" | "mp3" | "any"
     pub preferred_format:     String,
+    /// sldl --name-format: how downloaded files are named/organised.
+    /// Default sorts into Artist/Album folders using the CSV metadata.
+    #[serde(default = "default_name_format")]
+    pub name_format:          String,
     pub quality_warning:      bool,
     /// Per-playlist format overrides: { "playlist name" => "mp3" }
     #[serde(default)]
     pub playlist_overrides: std::collections::HashMap<String, String>,
+}
+
+pub fn default_name_format() -> String {
+    "{sartist(/)salbum(/)stitle|sartist(/)stitle|filename}".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +118,7 @@ impl Default for Config {
                 concurrent_playlists: 2,
                 concurrent_tracks:    4,
                 preferred_format:     "flac".into(),
+                name_format:          default_name_format(),
                 quality_warning:      true,
                 playlist_overrides:   Default::default(),
             },

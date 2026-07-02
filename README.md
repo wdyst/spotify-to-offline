@@ -101,8 +101,11 @@ Requires Rust + a C toolchain (MinGW on Windows, GCC/Clang on Linux/macOS). The 
  ↑↓ navigate   Enter download   a all   s settings   q quit
 ```
 
-Color coding: **green** = found & correct format · **yellow** = quality warning · **red** = failed/not found · **cyan** = progress  
-Press `s` in the TUI to open live Settings without leaving.
+Playlist colors: **green** = fully on disk · **yellow** = partially downloaded · **red** = attempted, nothing on disk · **white** = never downloaded. Each playlist shows its `on-disk/total` track count.
+
+Keys: `Enter` download · `a` all · `x` cancel · `/` search · `d` delete · `i` import · `m` M3U · `s` settings (works mid-download) · `r` rescan · `l` save log · `?` full help.
+
+Tracks already in your library (from any playlist) are detected and **reused instead of re-downloaded** — the log reports "N/M tracks already on disk".
 
 ---
 
@@ -113,9 +116,10 @@ Press `s` in the TUI to open live Settings without leaving.
 | `s2o setup` | First-time configuration wizard |
 | `s2o ui` | Interactive TUI (download + monitor) |
 | `s2o import [zip]` | Import Exportify CSVs (ZIP or folder) |
-| `s2o download [playlist]` | Headless download (omit name = all playlists) |
+| `s2o download [-p playlist]` | Headless download (omit name = all playlists) |
 | `s2o m3u [profile]` | Generate M3U files (optional DAP profile override) |
-| `s2o status` | Summary of DB: found, missing, quality warnings |
+| `s2o status` | Per-playlist on-disk counts + library totals |
+| `s2o remove <playlist>` | Remove a playlist (CSVs, M3U, history — audio kept) |
 
 ---
 
@@ -140,7 +144,8 @@ Run `s2o setup` once to configure, or press `s` inside the TUI to edit live. Con
 | `soulseek.password` | — | Soulseek password |
 | `provider.order` | `["soulseek","ytdlp"]` | Try providers in this order |
 | `provider.fallback_enabled` | `true` | Fall back to next provider if track not found |
-| `download.preferred_format` | `flac` | Preferred audio format |
+| `download.preferred_format` | `flac` | Preferred audio format (passed to sldl as `--pref-format`) |
+| `download.name_format` | `{sartist}/{salbum}/{stitle}` | How downloaded files are named/organised (sldl `--name-format`) |
 | `download.quality_warning` | `true` | Notify + log when format doesn't match |
 | `download.concurrent_playlists` | `2` | Playlists downloading at the same time |
 

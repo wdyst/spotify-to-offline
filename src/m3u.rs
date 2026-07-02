@@ -1,13 +1,16 @@
 /// M3U playlist generation.
 ///
 /// For each playlist CSV:
-///   - Walk music_root looking for matching audio files (fuzzy match on artist + title)
+///   - Walk music_root indexing audio files by their TAGS (artist + title),
+///     with filename-derived keys as fallback for untagged files
 ///   - Write M3U using the configured DAP profile's path style
 ///
-/// Fuzzy matching: strsim::jaro_winkler on "artist - title" strings.
-/// Threshold tuned to catch minor differences in spacing/punctuation.
+/// Tags are the primary key because s2o normalises Artist/Title/Album from
+/// the Exportify metadata right after download — so tag lookups are exact.
+/// Fuzzy (jaro_winkler) matching is the last resort.
 
 use anyhow::{Context, Result};
+use lofty::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use strsim::jaro_winkler;
@@ -82,8 +85,7 @@ fn generate_m3u(
 
     let mut matched = 0;
     for track in &tracks {
-        let key   = normalise(&format!("{} - {}", track.artist, track.title));
-        let found = find_track(&key, library);
+        let found = find_track(&track.artist, &track.title, library);
 
         if let Some(file_path) = found {
             if profile.extended {
@@ -130,12 +132,71 @@ fn scan_dir(dir: &Path, map: &mut HashMap<String, PathBuf>) {
         if path.is_dir() {
             scan_dir(&path, map);
         } else if is_audio(&path) {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                let key = normalise(stem);
-                map.entry(key).or_insert_with(|| path.clone());
-            }
+            index_file(&path, map);
         }
     }
+}
+
+/// Register every lookup key for one audio file. First writer wins per key.
+fn index_file(path: &Path, map: &mut HashMap<String, PathBuf>) {
+    let mut put = |key: String| {
+        if !key.is_empty() {
+            map.entry(key).or_insert_with(|| path.to_path_buf());
+        }
+    };
+
+    // Tag-based keys (most reliable)
+    if let Some((artist, title)) = read_tags(path) {
+        if !title.is_empty() {
+            if !artist.is_empty() {
+                put(normalise(&format!("{} {}", artist, title)));
+            }
+            put(normalise(&title));
+        }
+    }
+
+    // Filename-derived fallbacks: bare stem and "folder + stem" combos,
+    // with any leading track number ("08. ", "3 - ") stripped.
+    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+        let stripped = strip_track_number(stem);
+        put(normalise(stripped));
+
+        let parent = path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
+        let grandparent = path.parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str());
+        if let Some(dir) = parent {
+            put(normalise(&format!("{} {}", dir, stripped)));
+        }
+        if let Some(dir) = grandparent {
+            put(normalise(&format!("{} {}", dir, stripped)));
+        }
+    }
+}
+
+fn read_tags(path: &Path) -> Option<(String, String)> {
+    let tagged = lofty::probe::Probe::open(path).ok()?
+        .guess_file_type().ok()?
+        .read().ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
+    Some((
+        tag.artist().map(|c| c.to_string()).unwrap_or_default(),
+        tag.title().map(|c| c.to_string()).unwrap_or_default(),
+    ))
+}
+
+/// "08. Feel Good Drag" → "Feel Good Drag", "3 - Nerve" → "Nerve"
+fn strip_track_number(stem: &str) -> &str {
+    let t = stem.trim_start();
+    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 && digits <= 3 {
+        let rest = t[digits..].trim_start_matches([' ', '.', '-', '_']);
+        if !rest.is_empty() { return rest; }
+    }
+    t
 }
 
 fn is_audio(path: &Path) -> bool {
@@ -147,11 +208,24 @@ fn is_audio(path: &Path) -> bool {
 
 // ── Fuzzy match ───────────────────────────────────────────────────────────────
 
-fn find_track<'a>(query: &str, library: &'a HashMap<String, PathBuf>) -> Option<&'a PathBuf> {
-    if let Some(p) = library.get(query) { return Some(p); }
+fn find_track<'a>(
+    artist:  &str,
+    title:   &str,
+    library: &'a HashMap<String, PathBuf>,
+) -> Option<&'a PathBuf> {
+    // 1. Exact "artist title"
+    let combo = normalise(&format!("{} {}", artist, title));
+    if let Some(p) = library.get(&combo) { return Some(p); }
 
+    // 2. Exact title alone (covers untagged files / missing artist folders)
+    let title_key = normalise(title);
+    if title_key.len() >= 4 {
+        if let Some(p) = library.get(&title_key) { return Some(p); }
+    }
+
+    // 3. Fuzzy on the combined string
     library.iter()
-        .map(|(key, path)| (jaro_winkler(query, key), path))
+        .map(|(key, path)| (jaro_winkler(&combo, key), path))
         .filter(|(score, _)| *score >= MATCH_THRESHOLD)
         .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
         .map(|(_, path)| path)

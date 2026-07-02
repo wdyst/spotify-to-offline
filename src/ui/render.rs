@@ -36,6 +36,11 @@ pub fn draw_main(f: &mut Frame, app: &App) {
         draw_import_bar(f, area, app);
     }
 
+    // Delete confirmation popup
+    if let Some(name) = &app.confirm_delete {
+        draw_confirm_popup(f, area, name);
+    }
+
     // Help popup (drawn last so it's on top of everything)
     if app.show_help {
         draw_help_popup(f, area);
@@ -51,15 +56,22 @@ fn draw_playlist_panel(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Title changes when filter mode is active
+    let vis_count = app.visible_playlist_names().len();
     let title_str = if app.filter_mode {
-        format!(" / {}█ ", app.playlist_filter)
+        format!(" / {}█ ({}) ", app.playlist_filter, vis_count)
+    } else if !app.playlist_filter.is_empty() {
+        format!(" / {} ({}) — Esc clears ", app.playlist_filter, vis_count)
     } else if app.running && app.screen == Screen::Working {
         " Downloading… ".to_string()
     } else {
         " Playlists ".to_string()
     };
 
-    let border_col = if app.filter_mode { WARN } else { ACCENT };
+    let border_col = if app.filter_mode || !app.playlist_filter.is_empty() {
+        WARN
+    } else {
+        ACCENT
+    };
 
     let block = Block::default()
         .title(title_str)
@@ -94,7 +106,7 @@ fn draw_playlist_panel(f: &mut Frame, app: &App, area: Rect) {
         .take(visible)
         .map(|(i, name)| {
             let is_sel  = i == sel;
-            let is_dl   = app.downloading_name.as_deref() == Some(name);
+            let is_dl   = app.dl_progress.contains_key(*name) && app.running;
             let prefix  = if is_dl { "⬇ " } else if is_sel { "▶ " } else { "  " };
 
             // Colour by disk status; selection overrides to ACCENT
@@ -102,8 +114,9 @@ fn draw_playlist_panel(f: &mut Frame, app: &App, area: Rect) {
                 ACCENT
             } else {
                 match app.playlist_statuses.get(*name) {
-                    Some(PlaylistStatus::HasFiles) => OK,
-                    Some(PlaylistStatus::Empty)    => WARN,
+                    Some(PlaylistStatus::Complete) => OK,
+                    Some(PlaylistStatus::Partial)  => WARN,
+                    Some(PlaylistStatus::Empty)    => ERR,
                     _                              => Color::White,
                 }
             };
@@ -113,8 +126,23 @@ fn draw_playlist_panel(f: &mut Frame, app: &App, area: Rect) {
                 Modifier::empty()
             };
 
-            ListItem::new(format!("{}{}", prefix, name))
-                .style(Style::default().fg(color).add_modifier(modifier))
+            // Counts: live progress while downloading, else scanned disk state
+            let count_str = if let (true, Some(p)) = (app.running, app.dl_progress.get(*name)) {
+                format!(" {}/{}", p.done, p.total)
+            } else {
+                match app.playlist_counts.get(*name) {
+                    Some((done, total)) if *total > 0 => format!(" {}/{}", done, total),
+                    _ => String::new(),
+                }
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::styled(
+                    format!("{}{}", prefix, name),
+                    Style::default().fg(color).add_modifier(modifier),
+                ),
+                Span::styled(count_str, Style::default().fg(DIM)),
+            ]))
         })
         .collect();
 
@@ -334,14 +362,14 @@ fn draw_import_bar(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_hint_bar(f: &mut Frame, area: Rect, screen: Screen, running: bool, filter_mode: bool) {
     let hints = if filter_mode {
-        " type to filter   ↑↓ navigate   Enter download   Esc cancel"
+        " type to filter   ↑↓ navigate   Enter apply   Esc discard"
     } else {
         match screen {
             Screen::Import => " Enter confirm   Esc cancel",
             Screen::Working if running =>
-                " ↑↓ scroll log   PgUp/Dn page   q quit",
+                " x cancel   s settings   PgUp/Dn scroll log   ? help   q quit",
             _ =>
-                " ↑↓ nav   Enter dl   a all   / filter   ? help   i import   m m3u   s settings   q quit",
+                " Enter dl   a all   / filter   d delete   m m3u   s settings   ? help   q quit",
         }
     };
 
@@ -353,9 +381,47 @@ fn draw_hint_bar(f: &mut Frame, area: Rect, screen: Screen, running: bool, filte
 
 // ── Help popup ────────────────────────────────────────────────────────────────
 
+/// Small centered yes/no popup for playlist deletion.
+fn draw_confirm_popup(f: &mut Frame, area: Rect, name: &str) {
+    let popup_w = (name.chars().count() as u16 + 24).clamp(44, area.width.saturating_sub(4));
+    let popup_h = 5u16;
+    let x = area.width.saturating_sub(popup_w) / 2;
+    let y = area.height.saturating_sub(popup_h) / 2;
+    let popup = Rect { x, y, width: popup_w, height: popup_h };
+
+    f.render_widget(Clear, popup);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::raw("  Remove playlist "),
+            Span::styled(format!("'{}'", name), Style::default().fg(WARN).add_modifier(Modifier::BOLD)),
+            Span::raw("?"),
+        ]),
+        Line::from(Span::styled(
+            "  Deletes the list, M3U and history — audio files stay.",
+            Style::default().fg(DIM),
+        )),
+        Line::from(vec![
+            Span::styled("  y", Style::default().fg(ERR).add_modifier(Modifier::BOLD)),
+            Span::raw(" confirm   "),
+            Span::styled("any other key", Style::default().fg(ACCENT)),
+            Span::raw(" cancel"),
+        ]),
+    ];
+
+    let block = Block::default()
+        .title(" ── Delete? ── ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ERR));
+
+    f.render_widget(Paragraph::new(lines).block(block), popup);
+}
+
 fn draw_help_popup(f: &mut Frame, area: Rect) {
     let popup_w = 50u16;
-    let popup_h = 17u16;
+    let popup_h = 22u16;
     let x = area.width.saturating_sub(popup_w) / 2;
     let y = area.height.saturating_sub(popup_h) / 2;
     let popup = Rect {
@@ -378,15 +444,24 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
         Line::from(vec![key("↑↓ / jk"),    desc("navigate playlists")]),
         Line::from(vec![key("Enter"),       desc("download selected")]),
         Line::from(vec![key("a"),           desc("download all playlists")]),
-        Line::from(vec![key("/"),           desc("filter playlists")]),
+        Line::from(vec![key("x"),           desc("cancel running download")]),
+        Line::from(vec![key("/"),           desc("search playlists (Esc clears)")]),
+        Line::from(vec![key("d / Del"),     desc("remove selected playlist")]),
         Line::from(vec![key("i"),           desc("import Exportify ZIP")]),
         Line::from(vec![key("m"),           desc("generate M3U files")]),
         Line::from(vec![key("s"),           desc("settings")]),
+        Line::from(vec![key("r"),           desc("rescan disk statuses")]),
         Line::from(vec![key("l"),           desc("save log to file")]),
         Line::from(vec![key("PgUp / PgDn"), desc("scroll log")]),
-        Line::from(vec![key("?"),           desc("toggle this help")]),
         Line::from(vec![key("q / Ctrl+C"),  desc("quit")]),
         Line::from(""),
+        Line::from(vec![
+            Span::styled("  colors: ", Style::default().fg(DIM)),
+            Span::styled("done ", Style::default().fg(OK)),
+            Span::styled("partial ", Style::default().fg(WARN)),
+            Span::styled("failed ", Style::default().fg(ERR)),
+            Span::styled("new", Style::default().fg(Color::White)),
+        ]),
         Line::from(
             Span::styled("  any key to dismiss", Style::default().fg(DIM))
         ),

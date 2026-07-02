@@ -1,6 +1,6 @@
 [package]
 name    = "spotify-to-offline"
-version = "2.0.0"
+version = "3.1.0"
 edition = "2021"
 description = "Spotify → FLAC → DAP: batch-download playlists and generate M3U files"
 license     = "MIT"

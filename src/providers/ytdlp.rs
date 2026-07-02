@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{Provider, TrackOutcome};
+use super::{Provider, ProviderEvent, TerminalKind, TrackOutcome};
 use crate::config::Config;
 use crate::import::{load_playlist, TrackRow};
 
@@ -131,15 +131,36 @@ impl Provider for YtdlpProvider {
         &self,
         csv_path:   &Path,
         output_dir: &Path,
-        log_tx:     &UnboundedSender<String>,
+        ev_tx:      &UnboundedSender<ProviderEvent>,
+        cancel:     tokio::sync::watch::Receiver<bool>,
     ) -> Result<Vec<(TrackRow, TrackOutcome)>> {
         let tracks = load_playlist(csv_path)?;
         std::fs::create_dir_all(output_dir)?;
 
+        let _ = ev_tx.send(ProviderEvent::TrackList { total: tracks.len(), existing: 0 });
+
+        // Bridge run_track's plain-string logs into ProviderEvents
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let fwd = ev_tx.clone();
+        tokio::spawn(async move {
+            while let Some(l) = log_rx.recv().await {
+                let _ = fwd.send(ProviderEvent::Log(l));
+            }
+        });
+
         let mut results = Vec::with_capacity(tracks.len());
         for track in tracks {
-            let outcome = self.run_track(&track, output_dir, log_tx).await
+            if *cancel.borrow() {
+                anyhow::bail!("cancelled by user");
+            }
+            let outcome = self.run_track(&track, output_dir, &log_tx).await
                 .unwrap_or_else(|e| TrackOutcome::Failed { reason: e.to_string() });
+            let kind = match &outcome {
+                TrackOutcome::Ok { .. }      => TerminalKind::Succeeded,
+                TrackOutcome::Skipped { .. } => TerminalKind::Skipped,
+                _                            => TerminalKind::Failed,
+            };
+            let _ = ev_tx.send(ProviderEvent::TrackFinished { outcome: kind });
             results.push((track, outcome));
         }
         Ok(results)

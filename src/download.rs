@@ -9,14 +9,14 @@ use anyhow::Result;
 use chrono::Utc;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{mpsc::UnboundedSender, Semaphore};
+use tokio::sync::{mpsc::UnboundedSender, watch, Semaphore};
 
 use crate::{
     config::Config,
     db::{self, Record, Stats, Status},
     import::{self, TrackRow},
     notify,
-    providers::{self, TrackOutcome},
+    providers::{self, ProviderEvent, TerminalKind, TrackOutcome},
     tags,
 };
 
@@ -26,6 +26,15 @@ use crate::{
 pub enum Event {
     Log(String),
     PlaylistStart { name: String, index: usize, total: usize },
+    /// Live per-playlist progress while tracks stream in.
+    PlaylistProgress {
+        name:    String,
+        done:    usize,
+        total:   usize,
+        ok:      usize,
+        failed:  usize,
+        skipped: usize,
+    },
     TrackDone     { artist: String, title: String, status: String },
     PlaylistDone  { name: String },
     AllDone       { stats: Stats },
@@ -42,15 +51,18 @@ pub enum Event {
 /// CLI entry point — no event channel, progress goes to stdout via the
 /// provider log callbacks.
 pub async fn run_all_cli(cfg: &Config, only: Option<&str>) -> Result<()> {
-    run_all(cfg, only, None).await
+    let (_cancel_tx, cancel_rx) = watch::channel(false);
+    run_all(cfg, only, None, cancel_rx).await
 }
 
 /// Main orchestration. Pass `Some(sender)` when running under the TUI
-/// to stream live events; `None` for CLI runs.
+/// to stream live events; `None` for CLI runs. Flip `cancel` to true to
+/// abort: running subprocesses are killed, queued playlists are skipped.
 pub async fn run_all(
     cfg:      &Config,
     only:     Option<&str>,
     event_tx: Option<UnboundedSender<Event>>,
+    cancel:   watch::Receiver<bool>,
 ) -> Result<()> {
     let db   = Arc::new(std::sync::Mutex::new(db::open()?));
     let t0   = Utc::now();
@@ -82,6 +94,7 @@ pub async fn run_all(
         let cfg       = Arc::clone(&cfg_arc);
         let db        = Arc::clone(&db);
         let event_tx  = event_tx.clone();
+        let cancel    = cancel.clone();
 
         let name = csv_path
             .file_stem()
@@ -92,12 +105,17 @@ pub async fn run_all(
         tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
 
+            if *cancel.borrow() {
+                log(&event_tx, &format!("  ⊘ {} skipped (cancelled)", name));
+                return;
+            }
+
             emit(&event_tx, Event::PlaylistStart {
                 name: name.clone(), index: idx + 1, total,
             });
 
             if let Err(e) = download_playlist(
-                &cfg, &providers, &csv_path, &name, &db, &event_tx,
+                &cfg, &providers, &csv_path, &name, &db, &event_tx, cancel,
             ).await {
                 log(&event_tx, &format!("  ✗ {}: {}", name, e));
             }
@@ -115,8 +133,8 @@ pub async fn run_all(
     };
 
     let summary = format!(
-        "Done — {} found  {} not found  {} failed  {} quality warnings",
-        stats.ok, stats.not_found, stats.failed, stats.quality_warns,
+        "Done — {} downloaded  {} reused  {} not found  {} failed  {} quality warnings",
+        stats.ok, stats.skipped, stats.not_found, stats.failed, stats.quality_warns,
     );
     log(&event_tx, &format!("━━ {}", summary));
     emit(&event_tx, Event::AllDone { stats });
@@ -137,6 +155,7 @@ async fn download_playlist(
     name:      &str,
     db:        &Arc<std::sync::Mutex<rusqlite::Connection>>,
     event_tx:  &Option<UnboundedSender<Event>>,
+    cancel:    watch::Receiver<bool>,
 ) -> Result<()> {
     if providers.is_empty() {
         log(event_tx, "  ⚠ No providers configured — check Settings.");
@@ -150,12 +169,46 @@ async fn download_playlist(
 
     let output_dir = cfg.paths.music_root.clone();
 
-    // Forward per-provider log lines into the main event stream
-    let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // Translate provider events into TUI events, maintaining live counters.
+    let (ev_tx, mut ev_rx) = tokio::sync::mpsc::unbounded_channel::<ProviderEvent>();
     let event_fwd = event_tx.clone();
+    let pl_name   = name.to_string();
     tokio::spawn(async move {
-        while let Some(line) = log_rx.recv().await {
-            log(&event_fwd, &line);
+        let (mut done, mut total)              = (0usize, 0usize);
+        let (mut ok, mut failed, mut skipped)  = (0usize, 0usize, 0usize);
+
+        while let Some(ev) = ev_rx.recv().await {
+            match ev {
+                ProviderEvent::Log(l) => log(&event_fwd, &l),
+
+                ProviderEvent::TrackList { total: t, existing } => {
+                    // New provider run — reset live counters
+                    total = t;
+                    done = 0; ok = 0; failed = 0; skipped = 0;
+                    if existing > 0 {
+                        log(&event_fwd, &format!(
+                            "  · {}: {}/{} tracks already on disk — reusing",
+                            pl_name, existing, t,
+                        ));
+                    }
+                    emit(&event_fwd, Event::PlaylistProgress {
+                        name: pl_name.clone(), done, total, ok, failed, skipped,
+                    });
+                }
+
+                ProviderEvent::TrackFinished { outcome, .. } => {
+                    done += 1;
+                    match outcome {
+                        TerminalKind::Succeeded => ok      += 1,
+                        TerminalKind::Skipped   => skipped += 1,
+                        TerminalKind::Failed    => failed  += 1,
+                    }
+                    emit(&event_fwd, Event::PlaylistProgress {
+                        name: pl_name.clone(), done, total: total.max(done),
+                        ok, failed, skipped,
+                    });
+                }
+            }
         }
     });
 
@@ -163,7 +216,7 @@ async fn download_playlist(
     let mut outcomes: Vec<(TrackRow, TrackOutcome)> = Vec::new();
 
     for (i, provider) in providers.iter().enumerate() {
-        match provider.download_playlist(csv_path, &output_dir, &log_tx).await {
+        match provider.download_playlist(csv_path, &output_dir, &ev_tx, cancel.clone()).await {
             Err(e) => {
                 let msg = e.to_string();
                 log(event_tx, &format!("  ⚠ {} error: {}", provider.name(), msg));
@@ -175,10 +228,11 @@ async fn download_playlist(
                     log(event_tx,
                         "    → sldl not installed — press [s] › scroll to 'Download sldl' › Enter");
                 }
+                if lower.contains("cancelled") { break; }
                 continue;
             }
             Ok(results) => {
-                if i == 0 {
+                if i == 0 || outcomes.is_empty() {
                     outcomes = results;
                 } else if cfg.provider.fallback_enabled {
                     // Merge: fill in NotFound slots from this provider's results
@@ -196,7 +250,7 @@ async fn download_playlist(
         }
 
         let still_missing = outcomes.iter().any(|(_, o)| matches!(o, TrackOutcome::NotFound));
-        if !cfg.provider.fallback_enabled || !still_missing { break; }
+        if !cfg.provider.fallback_enabled || !still_missing || *cancel.borrow() { break; }
     }
 
     // Record outcomes, write tags, emit per-track events
@@ -286,6 +340,22 @@ fn process_track(
             }
         }
 
+        TrackOutcome::Skipped { path, format } => {
+            // Already on disk — record the reuse, but don't re-tag the file.
+            emit(event_tx, Event::TrackDone {
+                artist: track.artist.clone(),
+                title:  track.title.clone(),
+                status: "skipped (already on disk)".into(),
+            });
+            let _ = db::insert(conn, &Record {
+                playlist, artist: &track.artist, title: &track.title,
+                album: &track.album, provider,
+                status:    Status::Skipped,
+                file_path: path.as_deref(),
+                format:    format.as_deref(),
+            });
+        }
+
         TrackOutcome::NotFound => {
             emit(event_tx, Event::TrackDone {
                 artist: track.artist.clone(),
@@ -318,7 +388,18 @@ fn process_track(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn emit(tx: &Option<UnboundedSender<Event>>, ev: Event) {
-    if let Some(tx) = tx { let _ = tx.send(ev); }
+    match tx {
+        Some(tx) => { let _ = tx.send(ev); }
+        // CLI run — no TUI listening, print the interesting events instead
+        None => match ev {
+            Event::Log(s) => println!("{}", s),
+            Event::TrackDone { artist, title, status } =>
+                println!("  {} — {} [{}]", artist, title, status),
+            Event::PlaylistStart { name, index, total } =>
+                println!("[{}/{}] ▶ {}", index, total, name),
+            _ => {}
+        }
+    }
 }
 
 fn log(tx: &Option<UnboundedSender<Event>>, msg: &str) {

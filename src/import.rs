@@ -251,6 +251,41 @@ fn convert_all_with_log(log: impl Fn(String)) -> Result<usize> {
 
 // ── Public helpers ────────────────────────────────────────────────────────────
 
+/// Remove a playlist from s2o: its work + raw CSVs, generated M3Us, and the
+/// sockseek index folder. Downloaded audio files are NOT touched — they live
+/// in shared Artist/Album folders and may belong to other playlists.
+/// Returns the paths that were actually deleted.
+pub fn remove_playlist(cfg: &crate::config::Config, name: &str) -> Result<Vec<String>> {
+    let mut removed = Vec::new();
+    let mut zap = |p: PathBuf| {
+        if p.is_file() && std::fs::remove_file(&p).is_ok() {
+            removed.push(p.display().to_string());
+        }
+    };
+
+    zap(work_dir().join(format!("{}.csv", name)));
+    zap(raw_dir().join(format!("{}.csv", name)));
+    zap(cfg.paths.playlists_dir.join(format!("{}.m3u8", name)));
+    zap(cfg.paths.music_root.join(format!("{}.m3u8", name)));   // legacy sldl output
+
+    // sockseek's per-playlist index folder — remove the index, then the folder
+    // itself only if that leaves it empty (paranoia against odd layouts).
+    let index_dir = cfg.paths.music_root.join(name);
+    zap(index_dir.join("_index.csv"));
+    if index_dir.is_dir()
+        && std::fs::read_dir(&index_dir).map(|mut d| d.next().is_none()).unwrap_or(false)
+    {
+        if std::fs::remove_dir(&index_dir).is_ok() {
+            removed.push(index_dir.display().to_string());
+        }
+    }
+
+    if removed.is_empty() {
+        bail!("nothing found to remove for '{}'", name);
+    }
+    Ok(removed)
+}
+
 /// List all work CSVs sorted by name
 pub fn list_playlists() -> Result<Vec<PathBuf>> {
     let work = work_dir();
